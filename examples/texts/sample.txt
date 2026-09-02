@@ -1,0 +1,8 @@
+Put any UTF-8 text here. A paragraph may continue across several lines because
+ordinary line breaks are changed to spaces when the file is loaded.
+
+A blank line starts a new paragraph. During a quick speed test, SerialTypist picks
+whole paragraphs at random and combines enough of them to fill the test.
+
+You may add more files and subdirectories. Only files whose names end in .txt
+are loaded, so notes and unrelated files are safely ignored.
