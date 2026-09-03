@@ -26,6 +26,12 @@ go build -o serialtypist ./cmd/serialtypist
 ./serialtypist
 ```
 
+Load a directory of text files:
+```
+./SerialTypist -texts=vimuser/
+```
+
+
 It includes sample paragraphs, six lessons, and a small dictionary, so no setup
 is required for the first run.
 
