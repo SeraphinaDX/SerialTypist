@@ -11,6 +11,8 @@ styles:
 - **Dictionary drill:** builds a fresh exercise from randomized dictionary
   words.
 
+![Serial Typist Screenshot](screenshot.avif)
+
 The typing surface draws directly into gotui's cell buffer. Correct characters,
 incorrect characters, the current word, and the exact next position are all
 visually distinct. Text entry and cursor positions are Unicode-aware.
