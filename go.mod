@@ -3,6 +3,7 @@ module serialtypist
 go 1.24.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/metaspartan/gotui/v5 v5.0.3
 )

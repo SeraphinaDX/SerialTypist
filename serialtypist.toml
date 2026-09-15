@@ -1,0 +1,10 @@
+# Empty content paths use SerialTypist's bundled material. Relative paths are
+# resolved from the directory containing this file.
+[content]
+texts = ""
+lessons = ""
+dictionary = ""
+
+[practice]
+duration = "60s"
+dictionary_words = 60

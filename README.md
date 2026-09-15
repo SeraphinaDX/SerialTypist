@@ -1,8 +1,7 @@
 # SerialTypist
 
-SerialTypist is a colorful terminal typing trainer written in Go with
-[gotui v5](https://github.com/metaspartan/gotui). It has three useful practice
-styles:
+SerialTypist is a colorful terminal typing tutor written in Go with
+[gotui v5](https://github.com/metaspartan/gotui). It has three practice modes:
 
 - **Quick speed test:** selects random paragraphs from random `.txt` files and
   runs a timed test.
@@ -11,7 +10,7 @@ styles:
 - **Dictionary drill:** builds a fresh exercise from randomized dictionary
   words.
 
-![Serial Typist Screenshot](screenshot.avif)
+![SerialTypist screenshot](screenshot.avif)
 
 The typing surface draws directly into gotui's cell buffer. Correct characters,
 incorrect characters, the current word, and the exact next position are all
@@ -26,41 +25,89 @@ go build -o serialtypist ./cmd/serialtypist
 ./serialtypist
 ```
 
-Load a directory of text files:
-```
-./SerialTypist -texts=vimuser/
-```
+On Windows PowerShell:
 
+```powershell
+go build -o serialtypist.exe ./cmd/serialtypist
+.\serialtypist.exe
+```
 
 It includes sample paragraphs, six lessons, and a small dictionary, so no setup
 is required for the first run.
 
-For your own material:
+## TOML configuration
 
-```sh
-./serialtypist \
-  -texts=./my-texts \
-  -lessons=./my-lessons \
-  -dictionary=/usr/share/dict/words \
-  -duration=60s \
-  -words=80
+SerialTypist looks for configuration in this order:
+
+1. The file supplied with `-config=PATH`.
+2. `serialtypist.toml` in the current working directory.
+3. The operating system's per-user configuration directory.
+4. On Windows, the shared machine configuration directory.
+
+| System | Per-user location |
+| --- | --- |
+| Linux | `$XDG_CONFIG_HOME/serialtypist/serialtypist.toml`, normally `~/.config/serialtypist/serialtypist.toml` |
+| Windows | `%AppData%\SerialTypist\serialtypist.toml` |
+| macOS | `~/Library/Application Support/serialtypist/serialtypist.toml` |
+
+Windows also supports `%ProgramData%\SerialTypist\serialtypist.toml` after the
+per-user location. This is useful for a school administrator who wants one
+configuration for every account on a computer while still allowing a student's
+per-user configuration to take precedence.
+
+The per-user directory and file are optional; SerialTypist continues with its
+built-in content and defaults when neither exists. An explicitly supplied file
+must exist and be valid.
+
+```toml
+[content]
+texts = "texts"
+lessons = "lessons"
+dictionary = "words.txt"
+
+[practice]
+duration = "60s"
+dictionary_words = 60
 ```
 
-Using `-option=value` works consistently in bash, fish, and other shells.
+Relative content paths are resolved from the directory containing the TOML
+file—not from the directory where SerialTypist was launched. This lets a school
+copy one self-contained configuration and lesson directory between machines.
 
-## Options
+Windows absolute paths may use TOML literal strings, avoiding doubled
+backslashes:
+
+```toml
+[content]
+texts = 'C:\Typing\texts'
+lessons = 'C:\Typing\lessons'
+dictionary = 'C:\Typing\words.txt'
+```
+
+Command-line content and practice options override the corresponding TOML
+values. For example:
+
+```sh
+serialtypist -config=C:\Typing\serialtypist.toml -duration=30s
+```
+
+Using `-option=value` works consistently in bash, fish, PowerShell, and Command
+Prompt.
+
+## Command-line options
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `-texts=DIR` | bundled text | Quick-test `.txt` directory |
-| `-lessons=DIR` | bundled lessons | Lesson `.txt` directory |
-| `-dictionary=FILE` | bundled words | Dictionary file |
-| `-duration=TIME` | `60s` | Quick-test length (`30s`, `2m`, etc.) |
-| `-words=N` | `60` | Words in each dictionary drill |
+| `-config=FILE` | automatic lookup | TOML configuration file |
+| `-texts=DIR` | configured or bundled text | Quick-test `.txt` directory |
+| `-lessons=DIR` | configured or bundled lessons | Lesson `.txt` directory |
+| `-dictionary=FILE` | configured or bundled words | Dictionary file |
+| `-duration=TIME` | configured or `60s` | Quick-test length (`30s`, `2m`, etc.) |
+| `-words=N` | configured or `60` | Words in each dictionary drill |
 | `-version` | off | Print the program version |
 
-Supplying a path replaces the corresponding bundled content. This makes it
-easy to use only your own books, articles, source material, or course.
+Supplying a content path replaces the corresponding bundled content. This makes
+it easy to use only your own books, articles, source material, or course.
 
 ## Text directory format
 
@@ -81,8 +128,8 @@ See `examples/texts/` for a ready-to-copy example.
 
 ## Lesson directory format
 
-Each top-level `.txt` file is one lesson. SerialTypist sorts filenames, so numeric
-prefixes make the intended order explicit:
+Each top-level `.txt` file is one lesson. SerialTypist sorts filenames, so
+numeric prefixes make the intended order explicit:
 
 ```text
 001-home-row.txt
@@ -149,9 +196,11 @@ typed text.
 ```sh
 go test ./...
 go vet ./...
+go build ./cmd/serialtypist
 ```
 
-The content loader, session/scoring engine, Unicode behavior, and text layout
-have unit tests. The TUI itself can be smoke-tested in any 56×18 or larger
-terminal; an 80×24 TrueColor terminal is recommended.
-A blank line starts a new paragraph. During a quick speed test, SerialTypist picks
+The content loader, configuration loader, session/scoring engine, Unicode
+behavior, and text layout have unit tests. GitHub Actions runs the complete test,
+vet, and build suite on Linux, Windows, and macOS. The TUI itself can be
+smoke-tested in any 56×18 or larger terminal; an 80×24 TrueColor terminal is
+recommended.
