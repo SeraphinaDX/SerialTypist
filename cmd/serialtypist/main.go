@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"serialtypist/internal/config"
 	"serialtypist/internal/content"
