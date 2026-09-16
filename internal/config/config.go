@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,8 @@ type Settings struct {
 	Dictionary      string
 	Duration        time.Duration
 	DictionaryWords int
+	MinimumAccuracy float64
+	MinimumWPM      float64
 }
 
 type diskConfig struct {
@@ -32,6 +35,10 @@ type diskConfig struct {
 		Duration        string `toml:"duration"`
 		DictionaryWords int    `toml:"dictionary_words"`
 	} `toml:"practice"`
+	Mastery struct {
+		MinimumAccuracy float64 `toml:"minimum_accuracy"`
+		MinimumWPM      float64 `toml:"minimum_wpm"`
+	} `toml:"mastery"`
 }
 
 // Defaults returns settings that use bundled content.
@@ -39,6 +46,8 @@ func Defaults() Settings {
 	return Settings{
 		Duration:        60 * time.Second,
 		DictionaryWords: 60,
+		MinimumAccuracy: 95,
+		MinimumWPM:      20,
 	}
 }
 
@@ -125,8 +134,24 @@ func loadFile(path string) (Settings, string, error) {
 		}
 		settings.DictionaryWords = stored.Practice.DictionaryWords
 	}
+	if metadata.IsDefined("mastery", "minimum_accuracy") {
+		if invalidNumber(stored.Mastery.MinimumAccuracy) || stored.Mastery.MinimumAccuracy < 0 || stored.Mastery.MinimumAccuracy > 100 {
+			return Settings{}, "", fmt.Errorf("load config %q: mastery.minimum_accuracy must be between 0 and 100", absolutePath)
+		}
+		settings.MinimumAccuracy = stored.Mastery.MinimumAccuracy
+	}
+	if metadata.IsDefined("mastery", "minimum_wpm") {
+		if invalidNumber(stored.Mastery.MinimumWPM) || stored.Mastery.MinimumWPM < 0 {
+			return Settings{}, "", fmt.Errorf("load config %q: mastery.minimum_wpm must be zero or greater", absolutePath)
+		}
+		settings.MinimumWPM = stored.Mastery.MinimumWPM
+	}
 
 	return settings, absolutePath, nil
+}
+
+func invalidNumber(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
 }
 
 func userConfigPath(root, goos string) string {

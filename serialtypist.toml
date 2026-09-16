@@ -8,3 +8,9 @@ dictionary = ""
 [practice]
 duration = "60s"
 dictionary_words = 60
+
+# A lesson receives a checkmark after one attempt meets both requirements.
+# Set either value to 0 to disable that requirement.
+[mastery]
+minimum_accuracy = 95.0
+minimum_wpm = 20.0
