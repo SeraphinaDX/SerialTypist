@@ -12,13 +12,17 @@ import (
 	"github.com/metaspartan/gotui/v5/widgets"
 
 	"serialtypist/internal/content"
+	"serialtypist/internal/progress"
 	typingengine "serialtypist/internal/typing"
 )
 
 type Config struct {
-	Duration  time.Duration
-	WordCount int
-	Library   content.Library
+	Duration        time.Duration
+	WordCount       int
+	MinimumAccuracy float64
+	MinimumWPM      float64
+	Library         content.Library
+	Progress        *progress.Store
 }
 
 type screen int
@@ -48,6 +52,8 @@ type App struct {
 	sessionTitle    string
 	lessonSelection int
 	lessonIndex     int
+	lessonMastered  bool
+	progressError   string
 	width           int
 	height          int
 }
@@ -59,11 +65,15 @@ func New(config Config) *App {
 	if config.WordCount <= 0 {
 		config.WordCount = 60
 	}
-	return &App{
+	app := &App{
 		config: config,
 		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		screen: screenHome,
 	}
+	if next := app.nextIncompleteLesson(); next >= 0 {
+		app.lessonSelection = next
+	}
+	return app
 }
 
 func (a *App) Run() error {
@@ -103,7 +113,7 @@ func (a *App) Run() error {
 			if a.screen == screenTyping && a.session != nil && a.session.Started() {
 				a.session.Tick(now)
 				if a.session.Done() {
-					a.screen = screenResults
+					a.finishSession(now)
 				}
 				a.render()
 			}
@@ -122,6 +132,14 @@ func (a *App) handle(event ui.Event) bool {
 			a.screen = screenLessons
 		case "d", "D", "3":
 			a.startDictionary()
+		case "c", "C", "4":
+			next := a.nextIncompleteLesson()
+			if next < 0 {
+				a.screen = screenLessons
+			} else {
+				a.lessonSelection = next
+				a.startLesson(next)
+			}
 		case "<Escape>":
 			return true
 		}
@@ -180,15 +198,48 @@ func (a *App) addRune(r rune) {
 	if a.session == nil {
 		return
 	}
-	a.session.Add(r, time.Now())
+	now := time.Now()
+	a.session.Add(r, now)
 	if a.session.Done() {
-		a.screen = screenResults
+		a.finishSession(now)
+	}
+}
+
+func (a *App) finishSession(now time.Time) {
+	if a.session == nil || a.screen == screenResults {
+		return
+	}
+	a.screen = screenResults
+	if a.kind != kindLesson {
+		return
+	}
+
+	wpm := a.session.WPM(now)
+	accuracy := a.session.Accuracy()
+	a.lessonMastered = accuracy >= a.config.MinimumAccuracy && wpm >= a.config.MinimumWPM
+	if a.config.Progress == nil {
+		return
+	}
+	lesson := a.config.Library.Lessons[a.lessonIndex]
+	practicedAt := a.session.FinishedAt
+	if practicedAt.IsZero() {
+		practicedAt = now
+	}
+	if err := a.config.Progress.RecordLesson(
+		progress.LessonID(lesson.Source, lesson.Text),
+		wpm,
+		accuracy,
+		a.lessonMastered,
+		practicedAt,
+	); err != nil {
+		a.progressError = err.Error()
 	}
 }
 
 func (a *App) startQuick() {
 	minimum := int(a.config.Duration.Seconds()*15) + 500
 	target := a.config.Library.QuickText(a.rng, minimum)
+	a.resetResultState()
 	a.kind = kindQuick
 	a.sessionTitle = fmt.Sprintf("Quick Speed Test — %s", formatDuration(a.config.Duration))
 	a.session = typingengine.New(target, a.config.Duration)
@@ -197,6 +248,7 @@ func (a *App) startQuick() {
 
 func (a *App) startDictionary() {
 	target := a.config.Library.DictionaryText(a.rng, a.config.WordCount)
+	a.resetResultState()
 	a.kind = kindDictionary
 	a.sessionTitle = fmt.Sprintf("Dictionary Drill — %d words", a.config.WordCount)
 	a.session = typingengine.New(target, 0)
@@ -207,6 +259,7 @@ func (a *App) startLesson(index int) {
 	if index < 0 || index >= len(a.config.Library.Lessons) {
 		return
 	}
+	a.resetResultState()
 	a.kind = kindLesson
 	a.lessonIndex = index
 	lesson := a.config.Library.Lessons[index]
@@ -219,6 +272,7 @@ func (a *App) restartSame() {
 	if a.session == nil {
 		return
 	}
+	a.resetResultState()
 	a.session = typingengine.New(string(a.session.Target), a.session.Limit)
 	a.screen = screenTyping
 }
@@ -239,6 +293,36 @@ func (a *App) startNext() {
 		a.lessonSelection = next
 		a.startLesson(next)
 	}
+}
+
+func (a *App) resetResultState() {
+	a.lessonMastered = false
+	a.progressError = ""
+}
+
+func (a *App) lessonIDs() []string {
+	ids := make([]string, len(a.config.Library.Lessons))
+	for index, lesson := range a.config.Library.Lessons {
+		ids[index] = progress.LessonID(lesson.Source, lesson.Text)
+	}
+	return ids
+}
+
+func (a *App) nextIncompleteLesson() int {
+	if len(a.config.Library.Lessons) == 0 {
+		return -1
+	}
+	if a.config.Progress == nil {
+		return 0
+	}
+	return a.config.Progress.NextIncomplete(a.lessonIDs())
+}
+
+func (a *App) completedLessonCount() int {
+	if a.config.Progress == nil {
+		return 0
+	}
+	return a.config.Progress.CompletedCount(a.lessonIDs())
 }
 
 func (a *App) render() {
@@ -263,24 +347,32 @@ func (a *App) renderHome() {
 	backdrop := a.backdrop()
 	header := a.header("SERIAL TYPIST", "Accuracy first. Speed follows.")
 	body := a.paragraph("Choose a mode")
+	completed := a.completedLessonCount()
+	next := a.nextIncompleteLesson()
+	continueText := "Course mastered — review lessons"
+	if next >= 0 {
+		continueText = fmt.Sprintf("Lesson %d/%d — %s", next+1, len(a.config.Library.Lessons), a.config.Library.Lessons[next].Name)
+	}
 	body.Text = fmt.Sprintf(
-		"[1 / Q](fg:hotpink,mod:bold)  Quick speed test     Random paragraphs for %s\n\n"+
-			"[2 / L](fg:orchid,mod:bold)   Lessons              %d ordered lessons\n\n"+
-			"[3 / D](fg:turquoise,mod:bold)   Dictionary drill     %d randomized words\n\n\n"+
+		"[1 / Q](fg:hotpink,mod:bold)  Quick speed test     Random paragraphs for %s\n"+
+			"[2 / L](fg:orchid,mod:bold)   Lessons              %d ordered • %d mastered\n"+
+			"[3 / D](fg:turquoise,mod:bold)   Dictionary drill     %d randomized words\n"+
+			"[4 / C](fg:turquoise,mod:bold)   Continue course      %s\n\n"+
 			"Loaded: [ %d paragraphs • %d lessons • %d dictionary words ](fg:lightgrey)",
-		formatDuration(a.config.Duration), len(a.config.Library.Lessons), a.config.WordCount,
+		formatDuration(a.config.Duration), len(a.config.Library.Lessons), completed,
+		a.config.WordCount, continueText,
 		len(a.config.Library.Paragraphs), len(a.config.Library.Lessons), len(a.config.Library.Words),
 	)
 	body.TextAlignment = ui.AlignCenter
 	body.VerticalAlignment = ui.AlignMiddle
 	body.SetRect(2, 4, a.width-2, a.height-3)
-	footer := a.footer("Q/1 quick test  •  L/2 lessons  •  D/3 dictionary  •  Esc/Ctrl+C quit")
+	footer := a.footer("Q/1 quick  •  L/2 lessons  •  D/3 dictionary  •  C/4 continue  •  Esc quit")
 	ui.Render(backdrop, header, body, footer)
 }
 
 func (a *App) renderLessons() {
 	backdrop := a.backdrop()
-	header := a.header("LESSONS", "Up/Down selects • Enter begins")
+	header := a.header("LESSONS", "✓ mastered • ● attempted • ○ new")
 	body := a.paragraph("Lesson path")
 	var lines []string
 	visible := a.height - 10
@@ -299,16 +391,28 @@ func (a *App) renderLessons() {
 			start = 0
 		}
 	}
-	for i := start; i < end; i++ {
-		lesson := a.config.Library.Lessons[i]
+	for index := start; index < end; index++ {
+		lesson := a.config.Library.Lessons[index]
 		marker := "  "
-		if i == a.lessonSelection {
+		if index == a.lessonSelection {
 			marker = "❯ "
 		}
-		lines = append(lines, fmt.Sprintf("%s%2d. %s", marker, i+1, lesson.Name))
+		status := "○"
+		details := ""
+		if a.config.Progress != nil {
+			id := progress.LessonID(lesson.Source, lesson.Text)
+			if record, ok := a.config.Progress.Record(id); ok {
+				status = "●"
+				if record.Completed {
+					status = "✓"
+				}
+				details = fmt.Sprintf(" — %.0f WPM • %.1f%% • %d×", record.BestWPM, record.BestAccuracy, record.Attempts)
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %2d. %s%s", marker, status, index+1, lesson.Name, details))
 	}
 	body.Text = strings.Join(lines, "\n")
-	body.TitleRight = fmt.Sprintf(" %d of %d ", a.lessonSelection+1, len(a.config.Library.Lessons))
+	body.TitleRight = fmt.Sprintf(" %d of %d • %d mastered ", a.lessonSelection+1, len(a.config.Library.Lessons), a.completedLessonCount())
 	body.SetRect(2, 4, a.width-2, a.height-3)
 	footer := a.footer("↑/↓ or j/k select  •  Enter start  •  Esc menu  •  Ctrl+C quit")
 	ui.Render(backdrop, header, body, footer)
@@ -342,11 +446,24 @@ func (a *App) renderResults() {
 	header := a.header("RESULTS", a.sessionTitle)
 	body := a.paragraph("Session complete")
 	next := "new exercise"
+	mastery := ""
 	if a.kind == kindLesson {
 		if a.lessonIndex+1 < len(a.config.Library.Lessons) {
 			next = "next lesson"
 		} else {
 			next = "finish course"
+		}
+		if a.lessonMastered {
+			mastery = "\nMastery       [achieved ✓](fg:turquoise,mod:bold)"
+		} else {
+			mastery = fmt.Sprintf(
+				"\nMastery       [needs %.1f%% accuracy and %.0f WPM](fg:coral)",
+				a.config.MinimumAccuracy,
+				a.config.MinimumWPM,
+			)
+		}
+		if a.progressError != "" {
+			mastery += "\nProgress      [not saved: " + a.progressError + "](fg:coral)"
 		}
 	}
 	body.Text = fmt.Sprintf(
@@ -355,10 +472,10 @@ func (a *App) renderResults() {
 			"Correct      %d characters\n"+
 			"Attempts     %d\n"+
 			"Elapsed      %s\n"+
-			"Finished by  %s\n\n"+
+			"Finished by  %s%s\n\n"+
 			"[R](fg:orchid,mod:bold) repeat   [N / Enter](fg:hotpink,mod:bold) %s   [M](fg:turquoise,mod:bold) menu",
 		a.session.WPM(now), a.session.Accuracy(), a.session.CorrectCharacters(),
-		a.session.Attempts, formatDuration(a.session.Elapsed(now)), a.session.Reason, next,
+		a.session.Attempts, formatDuration(a.session.Elapsed(now)), a.session.Reason, mastery, next,
 	)
 	body.TextAlignment = ui.AlignCenter
 	body.VerticalAlignment = ui.AlignMiddle

@@ -1,14 +1,12 @@
 # SerialTypist
 
-![SerialTypist Logo](serialtypist.avif)
-
 SerialTypist is a colorful terminal typing tutor written in Go with
 [gotui v5](https://github.com/metaspartan/gotui). It has three practice modes:
 
 - **Quick speed test:** selects random paragraphs from random `.txt` files and
   runs a timed test.
 - **Lessons:** presents sorted lesson files one at a time and offers the next
-  lesson after each result.
+  lesson after each result, with persistent mastery and personal-best scores.
 - **Dictionary drill:** builds a fresh exercise from randomized dictionary
   words.
 
@@ -70,6 +68,10 @@ dictionary = "words.txt"
 [practice]
 duration = "60s"
 dictionary_words = 60
+
+[mastery]
+minimum_accuracy = 95.0
+minimum_wpm = 20.0
 ```
 
 Relative content paths are resolved from the directory containing the TOML
@@ -104,12 +106,41 @@ Prompt.
 | `-texts=DIR` | configured or bundled text | Quick-test `.txt` directory |
 | `-lessons=DIR` | configured or bundled lessons | Lesson `.txt` directory |
 | `-dictionary=FILE` | configured or bundled words | Dictionary file |
+| `-progress=FILE` | per-user state directory | Lesson progress file |
 | `-duration=TIME` | configured or `60s` | Quick-test length (`30s`, `2m`, etc.) |
 | `-words=N` | configured or `60` | Words in each dictionary drill |
 | `-version` | off | Print the program version |
 
 Supplying a content path replaces the corresponding bundled content. This makes
 it easy to use only your own books, articles, source material, or course.
+
+## Lesson progress and mastery
+
+SerialTypist records lesson attempts, personal-best WPM, personal-best
+accuracy, the most recent practice time, and whether each lesson is mastered.
+The lesson browser uses these markers:
+
+- `✓` mastered
+- `●` attempted but not yet mastered
+- `○` not attempted
+
+A lesson is mastered when one completed attempt meets both values in the
+`[mastery]` configuration section. Set a requirement to `0` to disable it. The
+home screen's `C`/`4` shortcut starts the first lesson that has not been
+mastered. Lessons can still be selected and practiced in any order.
+
+Progress is deliberately stored per operating-system user, even when a school
+uses a shared configuration from `%ProgramData%`:
+
+| System | Progress location |
+| --- | --- |
+| Linux | `$XDG_STATE_HOME/serialtypist/progress.toml`, normally `~/.local/state/serialtypist/progress.toml` |
+| Windows | `%LocalAppData%\SerialTypist\progress.toml` |
+| macOS | `~/Library/Application Support/SerialTypist/progress.toml` |
+
+Use `-progress=FILE` to override the location for a portable installation or
+test profile. Progress is written through a temporary file and rename so an
+interrupted save cannot leave a partially written TOML file.
 
 ## Text directory format
 
@@ -165,6 +196,7 @@ removed while loading.
 - `Q` or `1`: quick speed test
 - `L` or `2`: lesson browser
 - `D` or `3`: dictionary drill
+- `C` or `4`: continue with the first unmastered lesson
 - `Esc` or `Ctrl+C`: quit
 
 ### Lesson browser
@@ -191,7 +223,7 @@ removed while loading.
 WPM uses the conventional five-correct-characters-per-word formula. Accuracy
 counts every printable key attempt, so a corrected mistake still affects the
 accuracy result. The live error count shows only mistakes still present in the
-typed text.
+typed text. Lesson mastery defaults to at least 95% accuracy and 20 WPM.
 
 ## Development
 
@@ -201,8 +233,8 @@ go vet ./...
 go build ./cmd/serialtypist
 ```
 
-The content loader, configuration loader, session/scoring engine, Unicode
-behavior, and text layout have unit tests. GitHub Actions runs the complete test,
-vet, and build suite on Linux, Windows, and macOS. The TUI itself can be
-smoke-tested in any 56×18 or larger terminal; an 80×24 TrueColor terminal is
-recommended.
+The content loader, configuration loader, progress store, session/scoring
+engine, Unicode behavior, and text layout have unit tests. GitHub Actions runs
+the complete test, vet, and build suite on Linux, Windows, and macOS. The TUI
+itself can be smoke-tested in any 56×18 or larger terminal; an 80×24 TrueColor
+terminal is recommended.
