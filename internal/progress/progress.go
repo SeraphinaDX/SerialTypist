@@ -16,7 +16,7 @@ import (
 
 const (
 	FileName       = "progress.toml"
-	currentVersion = 1
+	currentVersion = 2
 )
 
 // LessonRecord is the best result and attempt count for one lesson.
@@ -29,8 +29,24 @@ type LessonRecord struct {
 }
 
 type fileData struct {
-	Version int                     `toml:"version"`
-	Lessons map[string]LessonRecord `toml:"lessons"`
+	Version           int                     `toml:"version"`
+	Lessons           map[string]LessonRecord `toml:"lessons"`
+	CharacterMistakes map[string]int          `toml:"character_mistakes"`
+	WordMistakes      map[string]int          `toml:"word_mistakes"`
+}
+
+// SessionUpdate contains the learning data produced by one completed session.
+// LessonID is optional because quick, dictionary, and adaptive sessions do not
+// update lesson mastery.
+type SessionUpdate struct {
+	LessonID          string
+	WPM               float64
+	Accuracy          float64
+	CompletedLesson   bool
+	PracticedAt       time.Time
+	CharacterMistakes map[rune]int
+	WordMistakes      map[string]int
+	DecayMistakes     bool
 }
 
 // Store is an in-memory view of a progress file.
@@ -47,7 +63,7 @@ func Open(path string) (*Store, error) {
 
 	store := &Store{
 		path: path,
-		data: fileData{Version: currentVersion, Lessons: make(map[string]LessonRecord)},
+		data: newFileData(),
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return store, nil
@@ -65,8 +81,15 @@ func Open(path string) (*Store, error) {
 	if loaded.Version == 0 {
 		loaded.Version = currentVersion
 	}
+	loaded.Version = currentVersion
 	if loaded.Lessons == nil {
 		loaded.Lessons = make(map[string]LessonRecord)
+	}
+	if loaded.CharacterMistakes == nil {
+		loaded.CharacterMistakes = make(map[string]int)
+	}
+	if loaded.WordMistakes == nil {
+		loaded.WordMistakes = make(map[string]int)
 	}
 	store.data = loaded
 	return store, nil
@@ -138,35 +161,78 @@ func (s *Store) RecordLesson(id string, wpm, accuracy float64, completed bool, p
 	if id == "" {
 		return fmt.Errorf("lesson ID is empty")
 	}
-	if invalidNumber(wpm) || wpm < 0 {
-		return fmt.Errorf("invalid WPM %.2f", wpm)
+	return s.RecordSession(SessionUpdate{
+		LessonID:        id,
+		WPM:             wpm,
+		Accuracy:        accuracy,
+		CompletedLesson: completed,
+		PracticedAt:     practicedAt,
+	})
+}
+
+// RecordSession updates lesson results and adaptive mistake weights in one
+// recoverable save. Adaptive sessions set DecayMistakes so old trouble spots
+// fade as the student practices them.
+func (s *Store) RecordSession(update SessionUpdate) error {
+	if update.LessonID != "" {
+		if invalidNumber(update.WPM) || update.WPM < 0 {
+			return fmt.Errorf("invalid WPM %.2f", update.WPM)
+		}
+		if invalidNumber(update.Accuracy) || update.Accuracy < 0 || update.Accuracy > 100 {
+			return fmt.Errorf("invalid accuracy %.2f", update.Accuracy)
+		}
 	}
-	if invalidNumber(accuracy) || accuracy < 0 || accuracy > 100 {
-		return fmt.Errorf("invalid accuracy %.2f", accuracy)
+	if update.LessonID == "" && !update.DecayMistakes && len(update.CharacterMistakes) == 0 && len(update.WordMistakes) == 0 {
+		return nil
 	}
 
-	previous, existed := s.data.Lessons[id]
-	updated := previous
-	updated.Attempts++
-	if wpm > updated.BestWPM {
-		updated.BestWPM = wpm
+	previous := cloneFileData(s.data)
+	if update.DecayMistakes {
+		decay(s.data.CharacterMistakes)
+		decay(s.data.WordMistakes)
 	}
-	if accuracy > updated.BestAccuracy {
-		updated.BestAccuracy = accuracy
+	for character, count := range update.CharacterMistakes {
+		if count > 0 {
+			s.data.CharacterMistakes[string(character)] += count
+		}
 	}
-	updated.Completed = updated.Completed || completed
-	updated.LastPracticed = practicedAt.UTC()
-	s.data.Lessons[id] = updated
+	for word, count := range update.WordMistakes {
+		if word != "" && count > 0 {
+			s.data.WordMistakes[word] += count
+		}
+	}
+	if update.LessonID != "" {
+		stored := s.data.Lessons[update.LessonID]
+		stored.Attempts++
+		if update.WPM > stored.BestWPM {
+			stored.BestWPM = update.WPM
+		}
+		if update.Accuracy > stored.BestAccuracy {
+			stored.BestAccuracy = update.Accuracy
+		}
+		stored.Completed = stored.Completed || update.CompletedLesson
+		stored.LastPracticed = update.PracticedAt.UTC()
+		s.data.Lessons[update.LessonID] = stored
+	}
 
 	if err := s.save(); err != nil {
-		if existed {
-			s.data.Lessons[id] = previous
-		} else {
-			delete(s.data.Lessons, id)
-		}
+		s.data = previous
 		return err
 	}
 	return nil
+}
+
+// Mistakes returns copies of the current character and word weights.
+func (s *Store) Mistakes() (map[string]int, map[string]int) {
+	characters := make(map[string]int, len(s.data.CharacterMistakes))
+	for character, count := range s.data.CharacterMistakes {
+		characters[character] = count
+	}
+	words := make(map[string]int, len(s.data.WordMistakes))
+	for word, count := range s.data.WordMistakes {
+		words[word] = count
+	}
+	return characters, words
 }
 
 // CompletedCount reports how many supplied lesson IDs are mastered.
@@ -231,4 +297,38 @@ func (s *Store) save() error {
 
 func invalidNumber(value float64) bool {
 	return math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func newFileData() fileData {
+	return fileData{
+		Version:           currentVersion,
+		Lessons:           make(map[string]LessonRecord),
+		CharacterMistakes: make(map[string]int),
+		WordMistakes:      make(map[string]int),
+	}
+}
+
+func cloneFileData(source fileData) fileData {
+	cloned := newFileData()
+	for id, record := range source.Lessons {
+		cloned.Lessons[id] = record
+	}
+	for character, count := range source.CharacterMistakes {
+		cloned.CharacterMistakes[character] = count
+	}
+	for word, count := range source.WordMistakes {
+		cloned.WordMistakes[word] = count
+	}
+	return cloned
+}
+
+func decay(weights map[string]int) {
+	for value, count := range weights {
+		count /= 2
+		if count == 0 {
+			delete(weights, value)
+		} else {
+			weights[value] = count
+		}
+	}
 }

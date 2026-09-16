@@ -11,7 +11,7 @@ import (
 	"serialtypist/internal/tui"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	defaults := config.Defaults()
