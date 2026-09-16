@@ -3,7 +3,7 @@
 ![Serial Typist Logo](serialtypist.avif)
 
 SerialTypist is a colorful terminal typing tutor written in Go with
-[gotui v5](https://github.com/metaspartan/gotui). It has three practice modes:
+[gotui v5](https://github.com/metaspartan/gotui). It has four practice modes:
 
 - **Quick speed test:** selects random paragraphs from random `.txt` files and
   runs a timed test.
@@ -11,6 +11,8 @@ SerialTypist is a colorful terminal typing tutor written in Go with
   lesson after each result, with persistent mastery and personal-best scores.
 - **Dictionary drill:** builds a fresh exercise from randomized dictionary
   words.
+- **Adaptive practice:** remembers corrected mistakes and builds focused drills
+  from troublesome words and dictionary words containing troublesome characters.
 
 ![SerialTypist screenshot](screenshot.avif)
 
@@ -144,6 +146,20 @@ Use `-progress=FILE` to override the location for a portable installation or
 test profile. Progress is written through a temporary file and rename so an
 interrupted save cannot leave a partially written TOML file.
 
+## Adaptive practice
+
+SerialTypist remembers the expected characters and words behind mistakes made
+in completed quick tests, lessons, and dictionary drills. Press `A` or `5` on
+the home screen to generate a drill weighted toward those trouble spots.
+Recorded words get the strongest preference; the supplied dictionary adds more
+words containing characters that need work. Printable symbols still produce a
+useful drill even when no dictionary word contains them.
+
+After each adaptive drill, earlier mistake weights are reduced before any new
+mistakes are added. This lets the focus move on as accuracy improves instead of
+repeating old trouble spots forever. Existing v0.3 progress files are upgraded
+in memory automatically, preserving all lesson records.
+
 ## Text directory format
 
 Quick mode searches the supplied directory and all subdirectories for files
@@ -199,6 +215,7 @@ removed while loading.
 - `L` or `2`: lesson browser
 - `D` or `3`: dictionary drill
 - `C` or `4`: continue with the first unmastered lesson
+- `A` or `5`: adaptive practice based on corrected mistakes
 - `Esc` or `Ctrl+C`: quit
 
 ### Lesson browser
@@ -235,8 +252,8 @@ go vet ./...
 go build ./cmd/serialtypist
 ```
 
-The content loader, configuration loader, progress store, session/scoring
-engine, Unicode behavior, and text layout have unit tests. GitHub Actions runs
-the complete test, vet, and build suite on Linux, Windows, and macOS. The TUI
-itself can be smoke-tested in any 56×18 or larger terminal; an 80×24 TrueColor
-terminal is recommended.
+The content loader, configuration loader, progress store, adaptive drill
+generator, session/scoring engine, Unicode behavior, and text layout have unit
+tests. GitHub Actions runs the complete test, vet, and build suite on Linux,
+Windows, and macOS. The TUI itself can be smoke-tested in any 56×18 or larger
+terminal; an 80×24 TrueColor terminal is recommended.

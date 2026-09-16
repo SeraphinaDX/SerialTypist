@@ -1,6 +1,10 @@
 package typing
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode"
+)
 
 // FinishReason identifies why a typing session stopped.
 type FinishReason string
@@ -19,11 +23,18 @@ type Session struct {
 	FinishedAt      time.Time
 	Attempts        int
 	CorrectAttempts int
+	Mistakes        map[rune]int
+	WordMistakes    map[string]int
 	Reason          FinishReason
 }
 
 func New(target string, limit time.Duration) *Session {
-	return &Session{Target: []rune(target), Limit: limit}
+	return &Session{
+		Target:       []rune(target),
+		Limit:        limit,
+		Mistakes:     make(map[rune]int),
+		WordMistakes: make(map[string]int),
+	}
 }
 
 func (s *Session) Position() int { return len(s.Typed) }
@@ -32,7 +43,9 @@ func (s *Session) Started() bool { return !s.StartedAt.IsZero() }
 
 func (s *Session) Done() bool { return !s.FinishedAt.IsZero() }
 
-// Add records one printable rune at the current position.
+// Add records one printable rune at the current position. When the rune is
+// wrong, the expected character and containing target word are retained for
+// future adaptive practice.
 func (s *Session) Add(r rune, now time.Time) {
 	if s.Done() || len(s.Typed) >= len(s.Target) {
 		return
@@ -40,9 +53,16 @@ func (s *Session) Add(r rune, now time.Time) {
 	if !s.Started() {
 		s.StartedAt = now
 	}
+	position := len(s.Typed)
+	expected := s.Target[position]
 	s.Attempts++
-	if r == s.Target[len(s.Typed)] {
+	if r == expected {
 		s.CorrectAttempts++
+	} else if !unicode.IsSpace(expected) {
+		s.Mistakes[expected]++
+		if word := targetWordAt(s.Target, position); word != "" {
+			s.WordMistakes[word]++
+		}
 	}
 	s.Typed = append(s.Typed, r)
 	if len(s.Typed) == len(s.Target) {
@@ -50,8 +70,8 @@ func (s *Session) Add(r rune, now time.Time) {
 	}
 }
 
-// Backspace removes the most recently typed rune. Attempt history is retained
-// so corrected mistakes still affect accuracy.
+// Backspace removes the most recently typed rune. Attempt and mistake history
+// is retained so corrected mistakes still affect accuracy and adaptive drills.
 func (s *Session) Backspace() {
 	if s.Done() || len(s.Typed) == 0 {
 		return
@@ -144,4 +164,19 @@ func (s *Session) Progress() float64 {
 		return 1
 	}
 	return float64(len(s.Typed)) / float64(len(s.Target))
+}
+
+func targetWordAt(target []rune, position int) string {
+	if position < 0 || position >= len(target) || unicode.IsSpace(target[position]) {
+		return ""
+	}
+	start := position
+	for start > 0 && !unicode.IsSpace(target[start-1]) {
+		start--
+	}
+	end := position + 1
+	for end < len(target) && !unicode.IsSpace(target[end]) {
+		end++
+	}
+	return strings.TrimSpace(string(target[start:end]))
 }

@@ -6,13 +6,16 @@ import (
 	"time"
 )
 
-func TestSessionTracksTypingAndCorrections(t *testing.T) {
+func TestSessionTracksTypingCorrectionsAndMistakes(t *testing.T) {
 	start := time.Unix(100, 0)
 	s := New("cat", 0)
 	s.Add('c', start)
 	s.Add('x', start.Add(time.Second))
 	if s.CurrentErrors() != 1 {
 		t.Fatalf("CurrentErrors = %d, want 1", s.CurrentErrors())
+	}
+	if s.Mistakes['a'] != 1 || s.WordMistakes["cat"] != 1 {
+		t.Fatalf("mistakes = %#v, words = %#v", s.Mistakes, s.WordMistakes)
 	}
 	s.Backspace()
 	s.Add('a', start.Add(2*time.Second))
@@ -50,13 +53,26 @@ func TestTimedSessionStartsOnFirstCharacter(t *testing.T) {
 	}
 }
 
-func TestUnicodePositionsUseRunes(t *testing.T) {
+func TestUnicodePositionsAndMistakesUseRunes(t *testing.T) {
 	s := New("café", 0)
 	now := time.Now()
-	for _, r := range "café" {
+	for _, r := range "cafx" {
 		s.Add(r, now)
 	}
 	if s.Position() != 4 || !s.Done() {
 		t.Fatalf("Position = %d, done=%v; want 4, true", s.Position(), s.Done())
+	}
+	if s.Mistakes['é'] != 1 || s.WordMistakes["café"] != 1 {
+		t.Fatalf("Unicode mistakes = %#v, words = %#v", s.Mistakes, s.WordMistakes)
+	}
+}
+
+func TestSpacesAreNotAdaptiveMistakes(t *testing.T) {
+	s := New("a b", 0)
+	now := time.Now()
+	s.Add('a', now)
+	s.Add('x', now)
+	if len(s.Mistakes) != 0 || len(s.WordMistakes) != 0 {
+		t.Fatalf("space mistake should not be retained: %#v %#v", s.Mistakes, s.WordMistakes)
 	}
 }

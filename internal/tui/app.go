@@ -11,6 +11,7 @@ import (
 	ui "github.com/metaspartan/gotui/v5"
 	"github.com/metaspartan/gotui/v5/widgets"
 
+	"serialtypist/internal/adaptive"
 	"serialtypist/internal/content"
 	"serialtypist/internal/progress"
 	typingengine "serialtypist/internal/typing"
@@ -40,6 +41,7 @@ const (
 	kindQuick sessionKind = iota
 	kindLesson
 	kindDictionary
+	kindAdaptive
 )
 
 type App struct {
@@ -54,6 +56,7 @@ type App struct {
 	lessonIndex     int
 	lessonMastered  bool
 	progressError   string
+	homeNotice      string
 	width           int
 	height          int
 }
@@ -140,6 +143,8 @@ func (a *App) handle(event ui.Event) bool {
 				a.lessonSelection = next
 				a.startLesson(next)
 			}
+		case "a", "A", "5":
+			a.startAdaptive()
 		case "<Escape>":
 			return true
 		}
@@ -210,28 +215,32 @@ func (a *App) finishSession(now time.Time) {
 		return
 	}
 	a.screen = screenResults
-	if a.kind != kindLesson {
-		return
-	}
-
 	wpm := a.session.WPM(now)
 	accuracy := a.session.Accuracy()
-	a.lessonMastered = accuracy >= a.config.MinimumAccuracy && wpm >= a.config.MinimumWPM
+	if a.kind == kindLesson {
+		a.lessonMastered = accuracy >= a.config.MinimumAccuracy && wpm >= a.config.MinimumWPM
+	}
 	if a.config.Progress == nil {
 		return
 	}
-	lesson := a.config.Library.Lessons[a.lessonIndex]
 	practicedAt := a.session.FinishedAt
 	if practicedAt.IsZero() {
 		practicedAt = now
 	}
-	if err := a.config.Progress.RecordLesson(
-		progress.LessonID(lesson.Source, lesson.Text),
-		wpm,
-		accuracy,
-		a.lessonMastered,
-		practicedAt,
-	); err != nil {
+	update := progress.SessionUpdate{
+		PracticedAt:       practicedAt,
+		CharacterMistakes: a.session.Mistakes,
+		WordMistakes:      a.session.WordMistakes,
+		DecayMistakes:     a.kind == kindAdaptive,
+	}
+	if a.kind == kindLesson {
+		lesson := a.config.Library.Lessons[a.lessonIndex]
+		update.LessonID = progress.LessonID(lesson.Source, lesson.Text)
+		update.WPM = wpm
+		update.Accuracy = accuracy
+		update.CompletedLesson = a.lessonMastered
+	}
+	if err := a.config.Progress.RecordSession(update); err != nil {
 		a.progressError = err.Error()
 	}
 }
@@ -240,6 +249,7 @@ func (a *App) startQuick() {
 	minimum := int(a.config.Duration.Seconds()*15) + 500
 	target := a.config.Library.QuickText(a.rng, minimum)
 	a.resetResultState()
+	a.homeNotice = ""
 	a.kind = kindQuick
 	a.sessionTitle = fmt.Sprintf("Quick Speed Test — %s", formatDuration(a.config.Duration))
 	a.session = typingengine.New(target, a.config.Duration)
@@ -249,8 +259,32 @@ func (a *App) startQuick() {
 func (a *App) startDictionary() {
 	target := a.config.Library.DictionaryText(a.rng, a.config.WordCount)
 	a.resetResultState()
+	a.homeNotice = ""
 	a.kind = kindDictionary
 	a.sessionTitle = fmt.Sprintf("Dictionary Drill — %d words", a.config.WordCount)
+	a.session = typingengine.New(target, 0)
+	a.screen = screenTyping
+}
+
+func (a *App) startAdaptive() {
+	if a.config.Progress == nil {
+		a.session = nil
+		a.screen = screenHome
+		a.homeNotice = "Adaptive practice is unavailable because progress storage is disabled."
+		return
+	}
+	characters, words := a.config.Progress.Mistakes()
+	target := adaptive.Build(a.rng, a.config.Library.Words, characters, words, a.config.WordCount)
+	if target == "" {
+		a.session = nil
+		a.screen = screenHome
+		a.homeNotice = "Complete another exercise with a few corrected mistakes to unlock adaptive practice."
+		return
+	}
+	a.resetResultState()
+	a.homeNotice = ""
+	a.kind = kindAdaptive
+	a.sessionTitle = fmt.Sprintf("Adaptive Practice — %d focused words", a.config.WordCount)
 	a.session = typingengine.New(target, 0)
 	a.screen = screenTyping
 }
@@ -260,6 +294,7 @@ func (a *App) startLesson(index int) {
 		return
 	}
 	a.resetResultState()
+	a.homeNotice = ""
 	a.kind = kindLesson
 	a.lessonIndex = index
 	lesson := a.config.Library.Lessons[index]
@@ -283,6 +318,8 @@ func (a *App) startNext() {
 		a.startQuick()
 	case kindDictionary:
 		a.startDictionary()
+	case kindAdaptive:
+		a.startAdaptive()
 	case kindLesson:
 		next := a.lessonIndex + 1
 		if next >= len(a.config.Library.Lessons) {
@@ -353,20 +390,32 @@ func (a *App) renderHome() {
 	if next >= 0 {
 		continueText = fmt.Sprintf("Lesson %d/%d — %s", next+1, len(a.config.Library.Lessons), a.config.Library.Lessons[next].Name)
 	}
+	adaptiveText := "No mistakes recorded yet"
+	if a.config.Progress != nil {
+		characters, words := a.config.Progress.Mistakes()
+		if len(characters) > 0 || len(words) > 0 {
+			adaptiveText = fmt.Sprintf("Focus on %d characters • %d words", len(characters), len(words))
+		}
+	}
+	notice := ""
+	if a.homeNotice != "" {
+		notice = "\n[" + a.homeNotice + "](fg:coral)"
+	}
 	body.Text = fmt.Sprintf(
 		"[1 / Q](fg:hotpink,mod:bold)  Quick speed test     Random paragraphs for %s\n"+
 			"[2 / L](fg:orchid,mod:bold)   Lessons              %d ordered • %d mastered\n"+
 			"[3 / D](fg:turquoise,mod:bold)   Dictionary drill     %d randomized words\n"+
-			"[4 / C](fg:turquoise,mod:bold)   Continue course      %s\n\n"+
-			"Loaded: [ %d paragraphs • %d lessons • %d dictionary words ](fg:lightgrey)",
+			"[4 / C](fg:turquoise,mod:bold)   Continue course      %s\n"+
+			"[5 / A](fg:hotpink,mod:bold)   Adaptive practice    %s\n\n"+
+			"Loaded: [ %d paragraphs • %d lessons • %d dictionary words ](fg:lightgrey)%s",
 		formatDuration(a.config.Duration), len(a.config.Library.Lessons), completed,
-		a.config.WordCount, continueText,
-		len(a.config.Library.Paragraphs), len(a.config.Library.Lessons), len(a.config.Library.Words),
+		a.config.WordCount, continueText, adaptiveText,
+		len(a.config.Library.Paragraphs), len(a.config.Library.Lessons), len(a.config.Library.Words), notice,
 	)
 	body.TextAlignment = ui.AlignCenter
 	body.VerticalAlignment = ui.AlignMiddle
 	body.SetRect(2, 4, a.width-2, a.height-3)
-	footer := a.footer("Q/1 quick  •  L/2 lessons  •  D/3 dictionary  •  C/4 continue  •  Esc quit")
+	footer := a.footer("1 quick • 2 lessons • 3 dictionary • 4 continue • 5 adaptive • Esc quit")
 	ui.Render(backdrop, header, body, footer)
 }
 
@@ -465,6 +514,11 @@ func (a *App) renderResults() {
 		if a.progressError != "" {
 			mastery += "\nProgress      [not saved: " + a.progressError + "](fg:coral)"
 		}
+	} else if a.kind == kindAdaptive {
+		next = "new adaptive drill"
+	}
+	if a.progressError != "" && a.kind != kindLesson {
+		mastery += "\nProgress      [not saved: " + a.progressError + "](fg:coral)"
 	}
 	body.Text = fmt.Sprintf(
 		"[%.0f WPM](fg:hotpink,mod:bold)\n\n"+

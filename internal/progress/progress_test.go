@@ -1,6 +1,7 @@
 package progress
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -48,6 +49,51 @@ func TestDefaultPathByPlatform(t *testing.T) {
 	}
 }
 
+func TestRecordSessionTracksAndDecaysMistakes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSession(SessionUpdate{
+		CharacterMistakes: map[rune]int{'a': 4, 'é': 1},
+		WordMistakes:      map[string]int{"café": 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSession(SessionUpdate{DecayMistakes: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	characters, words := reloaded.Mistakes()
+	if characters["a"] != 2 || characters["é"] != 0 || words["café"] != 1 {
+		t.Fatalf("decayed characters = %#v, words = %#v", characters, words)
+	}
+}
+
+func TestOpenMigratesVersionOneProgress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	contents := "version = 1\n\n[lessons.example]\ncompleted = true\nattempts = 1\nbest_wpm = 20.0\nbest_accuracy = 98.0\nlast_practiced = 2026-09-16T12:00:00Z\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok := store.Record("example"); !ok || !record.Completed {
+		t.Fatalf("migrated record = %+v, present=%v", record, ok)
+	}
+	characters, words := store.Mistakes()
+	if len(characters) != 0 || len(words) != 0 {
+		t.Fatalf("new mistake maps should be empty: %#v %#v", characters, words)
+	}
+}
+
 func TestRecordLessonPersistsBestResults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	store, err := Open(path)
@@ -77,6 +123,16 @@ func TestRecordLessonPersistsBestResults(t *testing.T) {
 	}
 	if record.BestWPM != 24 || record.BestAccuracy != 96 {
 		t.Fatalf("personal bests = %.1f WPM, %.1f%%", record.BestWPM, record.BestAccuracy)
+	}
+}
+
+func TestRecordLessonRejectsEmptyID(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordLesson("", 20, 95, true, time.Now()); err == nil {
+		t.Fatal("RecordLesson() accepted an empty lesson ID")
 	}
 }
 
