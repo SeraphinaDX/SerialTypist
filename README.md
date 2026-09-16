@@ -1,6 +1,6 @@
 # SerialTypist
 
-![Serial Typist Logo](serialtypists.avif)
+![Serial Typist Logo](serialtypist.avif)
 
 SerialTypist is a colorful terminal typing tutor written in Go with
 [gotui v5](https://github.com/metaspartan/gotui). It has three practice modes:
