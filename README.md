@@ -19,6 +19,8 @@ SerialTypist is a colorful terminal typing tutor written in Go with
 The typing surface draws directly into gotui's cell buffer. Correct characters,
 incorrect characters, the current word, and the exact next position are all
 visually distinct. Text entry and cursor positions are Unicode-aware.
+Completed exercises also feed a local progress dashboard with recent trends,
+personal bests, and the learner's current adaptive trouble spots.
 
 ## Quick start
 
@@ -110,7 +112,7 @@ Prompt.
 | `-texts=DIR` | configured or bundled text | Quick-test `.txt` directory |
 | `-lessons=DIR` | configured or bundled lessons | Lesson `.txt` directory |
 | `-dictionary=FILE` | configured or bundled words | Dictionary file |
-| `-progress=FILE` | per-user state directory | Lesson progress file |
+| `-progress=FILE` | per-user state directory | Progress and session-history file |
 | `-duration=TIME` | configured or `60s` | Quick-test length (`30s`, `2m`, etc.) |
 | `-words=N` | configured or `60` | Words in each dictionary drill |
 | `-version` | off | Print the program version |
@@ -157,8 +159,20 @@ useful drill even when no dictionary word contains them.
 
 After each adaptive drill, earlier mistake weights are reduced before any new
 mistakes are added. This lets the focus move on as accuracy improves instead of
-repeating old trouble spots forever. Existing v0.3 progress files are upgraded
-in memory automatically, preserving all lesson records.
+repeating old trouble spots forever.
+
+## Progress insights
+
+Press `S` or `6` on the home screen to open the progress dashboard. It shows
+all-time and recent average WPM and accuracy, a compact trend graph, the results
+for each practice mode, and the highest-weight trouble characters and words.
+`A` or `Enter` starts adaptive practice directly from the dashboard.
+
+The results screen compares a completed exercise with the previous ten sessions
+in the same mode and marks a new personal WPM best. SerialTypist retains the
+newest 200 completed sessions so the progress file stays bounded. Progress files
+from earlier releases are upgraded in memory automatically while preserving
+lesson mastery and adaptive mistake data.
 
 ## Text directory format
 
@@ -216,7 +230,13 @@ removed while loading.
 - `D` or `3`: dictionary drill
 - `C` or `4`: continue with the first unmastered lesson
 - `A` or `5`: adaptive practice based on corrected mistakes
+- `S` or `6`: progress insights
 - `Esc` or `Ctrl+C`: quit
+
+### Progress insights
+
+- `A` or `Enter`: start adaptive practice
+- `M` or `Esc`: return to the home screen
 
 ### Lesson browser
 
@@ -235,6 +255,7 @@ removed while loading.
 
 - `R`: repeat the same text
 - `N` or `Enter`: get a new test/drill or continue to the next lesson
+- `S`: open progress insights
 - `M` or `Esc`: return home
 
 ## Scoring
@@ -252,8 +273,9 @@ go vet ./...
 go build ./cmd/serialtypist
 ```
 
-The content loader, configuration loader, progress store, adaptive drill
-generator, session/scoring engine, Unicode behavior, and text layout have unit
-tests. GitHub Actions runs the complete test, vet, and build suite on Linux,
-Windows, and macOS. The TUI itself can be smoke-tested in any 56×18 or larger
-terminal; an 80×24 TrueColor terminal is recommended.
+The content loader, configuration loader, progress history and migration,
+adaptive drill generator, session/scoring engine, Unicode behavior, trend
+rendering, and text layout have unit tests. GitHub Actions runs the complete
+test, vet, and build suite on Linux, Windows, and macOS. The TUI itself can be
+smoke-tested in any 56×18 or larger terminal; an 80×24 TrueColor terminal is
+recommended.
