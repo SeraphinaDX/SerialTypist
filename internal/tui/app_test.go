@@ -144,3 +144,55 @@ func TestSessionSparkline(t *testing.T) {
 		t.Fatalf("sessionSparkline() = %q", got)
 	}
 }
+
+func TestPracticeModesUseConfiguredCorrectionBehavior(t *testing.T) {
+	lessons := []content.Lesson{{Name: "Home Row", Source: "001-home-row.txt", Text: "asdf"}}
+	app := New(Config{Library: content.Library{Lessons: lessons}})
+
+	app.startQuick()
+	if app.session.Correction != typingengine.CorrectionFree {
+		t.Fatalf("quick correction = %q, want free", app.session.Correction)
+	}
+	app.startLesson(0)
+	if app.session.Correction != typingengine.CorrectionStrict {
+		t.Fatalf("lesson correction = %q, want strict", app.session.Correction)
+	}
+
+	app.config.CorrectionMode = typingengine.CorrectionStrict
+	app.config.LessonCorrectionMode = typingengine.CorrectionFree
+	app.startDictionary()
+	if app.session.Correction != typingengine.CorrectionStrict {
+		t.Fatalf("dictionary correction = %q, want strict", app.session.Correction)
+	}
+	app.startLesson(0)
+	if app.session.Correction != typingengine.CorrectionFree {
+		t.Fatalf("overridden lesson correction = %q, want free", app.session.Correction)
+	}
+}
+
+func TestStrictRetryUsesUntimedStrictSession(t *testing.T) {
+	app := New(Config{})
+	app.screen = screenResults
+	app.session = typingengine.New("accuracy", 30*time.Second)
+	app.restartStrict()
+	if app.screen != screenTyping || app.session.Correction != typingengine.CorrectionStrict || app.session.Limit != 0 {
+		t.Fatalf("strict retry: screen=%d correction=%q limit=%s", app.screen, app.session.Correction, app.session.Limit)
+	}
+}
+
+func TestFreeModeFinalErrorCanBeCorrectedBeforeResults(t *testing.T) {
+	app := New(Config{})
+	app.kind = kindDictionary
+	app.screen = screenTyping
+	app.session = typingengine.New("a", 0)
+
+	app.addRune('x')
+	if app.screen != screenTyping || app.session.Done() {
+		t.Fatalf("wrong final key ended session: screen=%d done=%v", app.screen, app.session.Done())
+	}
+	app.session.Backspace()
+	app.addRune('a')
+	if app.screen != screenResults || !app.session.Done() || app.session.CorrectedErrors != 1 {
+		t.Fatalf("corrected final key: screen=%d done=%v corrected=%d", app.screen, app.session.Done(), app.session.CorrectedErrors)
+	}
+}

@@ -12,17 +12,24 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const FileName = "serialtypist.toml"
+const (
+	FileName = "serialtypist.toml"
+
+	CorrectionFree   = "free"
+	CorrectionStrict = "strict"
+)
 
 // Settings contains the resolved runtime configuration.
 type Settings struct {
-	TextDir         string
-	LessonDir       string
-	Dictionary      string
-	Duration        time.Duration
-	DictionaryWords int
-	MinimumAccuracy float64
-	MinimumWPM      float64
+	TextDir              string
+	LessonDir            string
+	Dictionary           string
+	Duration             time.Duration
+	DictionaryWords      int
+	CorrectionMode       string
+	LessonCorrectionMode string
+	MinimumAccuracy      float64
+	MinimumWPM           float64
 }
 
 type diskConfig struct {
@@ -32,8 +39,10 @@ type diskConfig struct {
 		Dictionary string `toml:"dictionary"`
 	} `toml:"content"`
 	Practice struct {
-		Duration        string `toml:"duration"`
-		DictionaryWords int    `toml:"dictionary_words"`
+		Duration             string `toml:"duration"`
+		DictionaryWords      int    `toml:"dictionary_words"`
+		CorrectionMode       string `toml:"correction_mode"`
+		LessonCorrectionMode string `toml:"lesson_correction_mode"`
 	} `toml:"practice"`
 	Mastery struct {
 		MinimumAccuracy float64 `toml:"minimum_accuracy"`
@@ -44,10 +53,12 @@ type diskConfig struct {
 // Defaults returns settings that use bundled content.
 func Defaults() Settings {
 	return Settings{
-		Duration:        60 * time.Second,
-		DictionaryWords: 60,
-		MinimumAccuracy: 95,
-		MinimumWPM:      20,
+		Duration:             60 * time.Second,
+		DictionaryWords:      60,
+		CorrectionMode:       CorrectionFree,
+		LessonCorrectionMode: CorrectionStrict,
+		MinimumAccuracy:      95,
+		MinimumWPM:           20,
 	}
 }
 
@@ -134,6 +145,20 @@ func loadFile(path string) (Settings, string, error) {
 		}
 		settings.DictionaryWords = stored.Practice.DictionaryWords
 	}
+	if metadata.IsDefined("practice", "correction_mode") {
+		mode := strings.ToLower(strings.TrimSpace(stored.Practice.CorrectionMode))
+		if !ValidCorrectionMode(mode) {
+			return Settings{}, "", fmt.Errorf("load config %q: practice.correction_mode must be %q or %q", absolutePath, CorrectionFree, CorrectionStrict)
+		}
+		settings.CorrectionMode = mode
+	}
+	if metadata.IsDefined("practice", "lesson_correction_mode") {
+		mode := strings.ToLower(strings.TrimSpace(stored.Practice.LessonCorrectionMode))
+		if !ValidCorrectionMode(mode) {
+			return Settings{}, "", fmt.Errorf("load config %q: practice.lesson_correction_mode must be %q or %q", absolutePath, CorrectionFree, CorrectionStrict)
+		}
+		settings.LessonCorrectionMode = mode
+	}
 	if metadata.IsDefined("mastery", "minimum_accuracy") {
 		if invalidNumber(stored.Mastery.MinimumAccuracy) || stored.Mastery.MinimumAccuracy < 0 || stored.Mastery.MinimumAccuracy > 100 {
 			return Settings{}, "", fmt.Errorf("load config %q: mastery.minimum_accuracy must be between 0 and 100", absolutePath)
@@ -152,6 +177,11 @@ func loadFile(path string) (Settings, string, error) {
 
 func invalidNumber(value float64) bool {
 	return math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+// ValidCorrectionMode reports whether mode is supported by the typing engine.
+func ValidCorrectionMode(mode string) bool {
+	return mode == CorrectionFree || mode == CorrectionStrict
 }
 
 func userConfigPath(root, goos string) string {

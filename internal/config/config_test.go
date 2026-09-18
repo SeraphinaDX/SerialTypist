@@ -52,6 +52,8 @@ dictionary = "words.txt"
 [practice]
 duration = "45s"
 dictionary_words = 75
+correction_mode = "strict"
+lesson_correction_mode = "free"
 
 [mastery]
 minimum_accuracy = 97.5
@@ -83,6 +85,9 @@ minimum_wpm = 25
 	if settings.DictionaryWords != 75 {
 		t.Fatalf("dictionary words = %d", settings.DictionaryWords)
 	}
+	if settings.CorrectionMode != CorrectionStrict || settings.LessonCorrectionMode != CorrectionFree {
+		t.Fatalf("correction modes = %q and %q", settings.CorrectionMode, settings.LessonCorrectionMode)
+	}
 	if settings.MinimumAccuracy != 97.5 || settings.MinimumWPM != 25 {
 		t.Fatalf("mastery = %.1f%% and %.1f WPM", settings.MinimumAccuracy, settings.MinimumWPM)
 	}
@@ -107,6 +112,8 @@ func TestLoadFileRejectsInvalidPracticeValues(t *testing.T) {
 	}{
 		{name: "duration", content: "[practice]\nduration = \"forever\"\n"},
 		{name: "word count", content: "[practice]\ndictionary_words = 0\n"},
+		{name: "correction mode", content: "[practice]\ncorrection_mode = \"sometimes\"\n"},
+		{name: "lesson correction mode", content: "[practice]\nlesson_correction_mode = \"eventually\"\n"},
 		{name: "negative accuracy", content: "[mastery]\nminimum_accuracy = -1\n"},
 		{name: "excessive accuracy", content: "[mastery]\nminimum_accuracy = 101\n"},
 		{name: "negative WPM", content: "[mastery]\nminimum_wpm = -1\n"},
@@ -122,5 +129,12 @@ func TestLoadFileRejectsInvalidPracticeValues(t *testing.T) {
 				t.Fatal("expected invalid practice setting to fail")
 			}
 		})
+	}
+}
+
+func TestDefaultsUseFreePracticeAndStrictLessons(t *testing.T) {
+	settings := Defaults()
+	if settings.CorrectionMode != CorrectionFree || settings.LessonCorrectionMode != CorrectionStrict {
+		t.Fatalf("default correction modes = %q and %q", settings.CorrectionMode, settings.LessonCorrectionMode)
 	}
 }

@@ -18,6 +18,9 @@ func TestSessionTracksTypingCorrectionsAndMistakes(t *testing.T) {
 		t.Fatalf("mistakes = %#v, words = %#v", s.Mistakes, s.WordMistakes)
 	}
 	s.Backspace()
+	if s.CorrectedErrors != 1 {
+		t.Fatalf("CorrectedErrors = %d, want 1", s.CorrectedErrors)
+	}
 	s.Add('a', start.Add(2*time.Second))
 	s.Add('t', start.Add(3*time.Second))
 
@@ -59,11 +62,16 @@ func TestUnicodePositionsAndMistakesUseRunes(t *testing.T) {
 	for _, r := range "cafx" {
 		s.Add(r, now)
 	}
-	if s.Position() != 4 || !s.Done() {
-		t.Fatalf("Position = %d, done=%v; want 4, true", s.Position(), s.Done())
+	if s.Position() != 4 || s.Done() {
+		t.Fatalf("final error should remain correctable: position=%d done=%v", s.Position(), s.Done())
 	}
 	if s.Mistakes['é'] != 1 || s.WordMistakes["café"] != 1 {
 		t.Fatalf("Unicode mistakes = %#v, words = %#v", s.Mistakes, s.WordMistakes)
+	}
+	s.Backspace()
+	s.Add('é', now)
+	if !s.Done() || s.CorrectedErrors != 1 {
+		t.Fatalf("corrected final error: done=%v corrected=%d", s.Done(), s.CorrectedErrors)
 	}
 }
 
@@ -74,5 +82,43 @@ func TestSpacesAreNotAdaptiveMistakes(t *testing.T) {
 	s.Add('x', now)
 	if len(s.Mistakes) != 0 || len(s.WordMistakes) != 0 {
 		t.Fatalf("space mistake should not be retained: %#v %#v", s.Mistakes, s.WordMistakes)
+	}
+}
+
+func TestStrictModeRejectsWrongKeysUntilCorrected(t *testing.T) {
+	start := time.Unix(300, 0)
+	s := NewWithMode("cat", 0, CorrectionStrict)
+	s.Add('c', start)
+	s.Add('x', start.Add(time.Second))
+	s.Add('z', start.Add(2*time.Second))
+
+	if s.Position() != 1 || !s.NeedsCorrection() || s.UnresolvedErrors() != 2 {
+		t.Fatalf("strict rejection: position=%d needs=%v unresolved=%d", s.Position(), s.NeedsCorrection(), s.UnresolvedErrors())
+	}
+	s.Backspace()
+	if s.Position() != 1 {
+		t.Fatalf("backspace moved during strict correction: position=%d", s.Position())
+	}
+	s.Add('a', start.Add(3*time.Second))
+	s.Add('t', start.Add(4*time.Second))
+
+	if !s.Done() || s.Position() != 3 || s.CorrectedErrors != 2 || s.UnresolvedErrors() != 0 {
+		t.Fatalf("strict completion: done=%v position=%d corrected=%d unresolved=%d", s.Done(), s.Position(), s.CorrectedErrors, s.UnresolvedErrors())
+	}
+	if s.Mistakes['a'] != 2 || s.WordMistakes["cat"] != 2 {
+		t.Fatalf("strict adaptive mistakes = %#v %#v", s.Mistakes, s.WordMistakes)
+	}
+	if math.Abs(s.Accuracy()-60) > 0.001 {
+		t.Fatalf("strict accuracy = %.2f, want 60", s.Accuracy())
+	}
+}
+
+func TestStrictModeTimedSessionCanFinishWithUnresolvedErrors(t *testing.T) {
+	start := time.Unix(400, 0)
+	s := NewWithMode("a", 10*time.Second, CorrectionStrict)
+	s.Add('x', start)
+	s.Tick(start.Add(10 * time.Second))
+	if !s.Done() || s.Reason != FinishedTime || s.UnresolvedErrors() != 1 || s.CorrectedErrors != 0 {
+		t.Fatalf("timed strict result: done=%v reason=%q unresolved=%d corrected=%d", s.Done(), s.Reason, s.UnresolvedErrors(), s.CorrectedErrors)
 	}
 }
