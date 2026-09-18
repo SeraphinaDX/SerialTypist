@@ -1,4 +1,4 @@
-// Package progress stores per-user lesson results.
+// Package progress stores per-user lesson results and practice history.
 package progress
 
 import (
@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -16,7 +17,13 @@ import (
 
 const (
 	FileName       = "progress.toml"
-	currentVersion = 2
+	currentVersion = 3
+	maxHistory     = 200
+
+	ModeQuick      = "quick"
+	ModeLesson     = "lesson"
+	ModeDictionary = "dictionary"
+	ModeAdaptive   = "adaptive"
 )
 
 // LessonRecord is the best result and attempt count for one lesson.
@@ -28,22 +35,53 @@ type LessonRecord struct {
 	LastPracticed time.Time `toml:"last_practiced"`
 }
 
+// SessionRecord is one completed exercise retained for progress insights.
+type SessionRecord struct {
+	Mode              string    `toml:"mode"`
+	WPM               float64   `toml:"wpm"`
+	Accuracy          float64   `toml:"accuracy"`
+	CorrectCharacters int       `toml:"correct_characters"`
+	Attempts          int       `toml:"attempts"`
+	DurationSeconds   float64   `toml:"duration_seconds"`
+	PracticedAt       time.Time `toml:"practiced_at"`
+}
+
+// Summary aggregates a selection of completed sessions.
+type Summary struct {
+	Sessions        int
+	AverageWPM      float64
+	AverageAccuracy float64
+	BestWPM         float64
+	TotalDuration   time.Duration
+}
+
+// TroubleItem is one weighted character or word used by adaptive practice.
+type TroubleItem struct {
+	Text   string
+	Weight int
+}
+
 type fileData struct {
 	Version           int                     `toml:"version"`
 	Lessons           map[string]LessonRecord `toml:"lessons"`
 	CharacterMistakes map[string]int          `toml:"character_mistakes"`
 	WordMistakes      map[string]int          `toml:"word_mistakes"`
+	History           []SessionRecord         `toml:"history"`
 }
 
 // SessionUpdate contains the learning data produced by one completed session.
 // LessonID is optional because quick, dictionary, and adaptive sessions do not
 // update lesson mastery.
 type SessionUpdate struct {
-	LessonID          string
-	WPM               float64
-	Accuracy          float64
-	CompletedLesson   bool
-	PracticedAt       time.Time
+	Mode               string
+	LessonID           string
+	WPM                float64
+	Accuracy           float64
+	CorrectCharacters int
+	Attempts           int
+	Elapsed            time.Duration
+	CompletedLesson    bool
+	PracticedAt        time.Time
 	CharacterMistakes map[rune]int
 	WordMistakes      map[string]int
 	DecayMistakes     bool
@@ -90,6 +128,9 @@ func Open(path string) (*Store, error) {
 	}
 	if loaded.WordMistakes == nil {
 		loaded.WordMistakes = make(map[string]int)
+	}
+	if len(loaded.History) > maxHistory {
+		loaded.History = append([]SessionRecord(nil), loaded.History[len(loaded.History)-maxHistory:]...)
 	}
 	store.data = loaded
 	return store, nil
@@ -162,6 +203,7 @@ func (s *Store) RecordLesson(id string, wpm, accuracy float64, completed bool, p
 		return fmt.Errorf("lesson ID is empty")
 	}
 	return s.RecordSession(SessionUpdate{
+		Mode:             ModeLesson,
 		LessonID:        id,
 		WPM:             wpm,
 		Accuracy:        accuracy,
@@ -174,15 +216,27 @@ func (s *Store) RecordLesson(id string, wpm, accuracy float64, completed bool, p
 // recoverable save. Adaptive sessions set DecayMistakes so old trouble spots
 // fade as the student practices them.
 func (s *Store) RecordSession(update SessionUpdate) error {
-	if update.LessonID != "" {
+	if update.Mode != "" && !validMode(update.Mode) {
+		return fmt.Errorf("invalid session mode %q", update.Mode)
+	}
+	if update.Mode != "" || update.LessonID != "" {
 		if invalidNumber(update.WPM) || update.WPM < 0 {
 			return fmt.Errorf("invalid WPM %.2f", update.WPM)
 		}
 		if invalidNumber(update.Accuracy) || update.Accuracy < 0 || update.Accuracy > 100 {
 			return fmt.Errorf("invalid accuracy %.2f", update.Accuracy)
 		}
+		if update.CorrectCharacters < 0 {
+			return fmt.Errorf("invalid correct character count %d", update.CorrectCharacters)
+		}
+		if update.Attempts < 0 {
+			return fmt.Errorf("invalid attempt count %d", update.Attempts)
+		}
+		if update.Elapsed < 0 {
+			return fmt.Errorf("invalid elapsed time %s", update.Elapsed)
+		}
 	}
-	if update.LessonID == "" && !update.DecayMistakes && len(update.CharacterMistakes) == 0 && len(update.WordMistakes) == 0 {
+	if update.Mode == "" && update.LessonID == "" && !update.DecayMistakes && len(update.CharacterMistakes) == 0 && len(update.WordMistakes) == 0 {
 		return nil
 	}
 
@@ -214,6 +268,21 @@ func (s *Store) RecordSession(update SessionUpdate) error {
 		stored.LastPracticed = update.PracticedAt.UTC()
 		s.data.Lessons[update.LessonID] = stored
 	}
+	if update.Mode != "" {
+		record := SessionRecord{
+			Mode:              update.Mode,
+			WPM:               update.WPM,
+			Accuracy:          update.Accuracy,
+			CorrectCharacters: update.CorrectCharacters,
+			Attempts:          update.Attempts,
+			DurationSeconds:   update.Elapsed.Seconds(),
+			PracticedAt:       update.PracticedAt.UTC(),
+		}
+		s.data.History = append(s.data.History, record)
+		if len(s.data.History) > maxHistory {
+			s.data.History = append([]SessionRecord(nil), s.data.History[len(s.data.History)-maxHistory:]...)
+		}
+	}
 
 	if err := s.save(); err != nil {
 		s.data = previous
@@ -233,6 +302,57 @@ func (s *Store) Mistakes() (map[string]int, map[string]int) {
 		words[word] = count
 	}
 	return characters, words
+}
+
+// History returns a copy of completed sessions in chronological order.
+func (s *Store) History() []SessionRecord {
+	return append([]SessionRecord(nil), s.data.History...)
+}
+
+// Recent returns up to limit matching sessions in chronological order. An
+// empty mode includes every practice mode; a non-positive limit includes all.
+func (s *Store) Recent(mode string, limit int) []SessionRecord {
+	matching := make([]SessionRecord, 0, len(s.data.History))
+	for _, record := range s.data.History {
+		if mode == "" || record.Mode == mode {
+			matching = append(matching, record)
+		}
+	}
+	if limit > 0 && len(matching) > limit {
+		matching = matching[len(matching)-limit:]
+	}
+	return append([]SessionRecord(nil), matching...)
+}
+
+// Summary aggregates up to limit recent sessions for one mode. An empty mode
+// includes every mode; a non-positive limit includes all retained history.
+func (s *Store) Summary(mode string, limit int) Summary {
+	records := s.Recent(mode, limit)
+	var summary Summary
+	for _, record := range records {
+		summary.Sessions++
+		summary.AverageWPM += record.WPM
+		summary.AverageAccuracy += record.Accuracy
+		if record.WPM > summary.BestWPM {
+			summary.BestWPM = record.WPM
+		}
+		summary.TotalDuration += time.Duration(record.DurationSeconds * float64(time.Second))
+	}
+	if summary.Sessions > 0 {
+		summary.AverageWPM /= float64(summary.Sessions)
+		summary.AverageAccuracy /= float64(summary.Sessions)
+	}
+	return summary
+}
+
+// TopCharacters returns the highest current adaptive character weights.
+func (s *Store) TopCharacters(limit int) []TroubleItem {
+	return topTrouble(s.data.CharacterMistakes, limit)
+}
+
+// TopWords returns the highest current adaptive word weights.
+func (s *Store) TopWords(limit int) []TroubleItem {
+	return topTrouble(s.data.WordMistakes, limit)
 }
 
 // CompletedCount reports how many supplied lesson IDs are mastered.
@@ -305,6 +425,7 @@ func newFileData() fileData {
 		Lessons:           make(map[string]LessonRecord),
 		CharacterMistakes: make(map[string]int),
 		WordMistakes:      make(map[string]int),
+		History:           make([]SessionRecord, 0),
 	}
 }
 
@@ -319,6 +440,7 @@ func cloneFileData(source fileData) fileData {
 	for word, count := range source.WordMistakes {
 		cloned.WordMistakes[word] = count
 	}
+	cloned.History = append(cloned.History, source.History...)
 	return cloned
 }
 
@@ -331,4 +453,32 @@ func decay(weights map[string]int) {
 			weights[value] = count
 		}
 	}
+}
+
+func validMode(mode string) bool {
+	switch mode {
+	case ModeQuick, ModeLesson, ModeDictionary, ModeAdaptive:
+		return true
+	default:
+		return false
+	}
+}
+
+func topTrouble(weights map[string]int, limit int) []TroubleItem {
+	items := make([]TroubleItem, 0, len(weights))
+	for text, weight := range weights {
+		if text != "" && weight > 0 {
+			items = append(items, TroubleItem{Text: text, Weight: weight})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Weight == items[j].Weight {
+			return items[i].Text < items[j].Text
+		}
+		return items[i].Weight > items[j].Weight
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
 }

@@ -31,6 +31,7 @@ type screen int
 const (
 	screenHome screen = iota
 	screenLessons
+	screenProgress
 	screenTyping
 	screenResults
 )
@@ -57,6 +58,8 @@ type App struct {
 	lessonMastered  bool
 	progressError   string
 	homeNotice      string
+	comparison      progress.Summary
+	newBestWPM      bool
 	width           int
 	height          int
 }
@@ -145,6 +148,8 @@ func (a *App) handle(event ui.Event) bool {
 			}
 		case "a", "A", "5":
 			a.startAdaptive()
+		case "s", "S", "6":
+			a.screen = screenProgress
 		case "<Escape>":
 			return true
 		}
@@ -162,6 +167,14 @@ func (a *App) handle(event ui.Event) bool {
 		case "<Enter>":
 			a.startLesson(a.lessonSelection)
 		case "<Escape>":
+			a.screen = screenHome
+		}
+
+	case screenProgress:
+		switch event.ID {
+		case "a", "A", "<Enter>":
+			a.startAdaptive()
+		case "m", "M", "<Escape>":
 			a.screen = screenHome
 		}
 
@@ -194,6 +207,8 @@ func (a *App) handle(event ui.Event) bool {
 		case "m", "M", "<Escape>":
 			a.session = nil
 			a.screen = screenHome
+		case "s", "S":
+			a.screen = screenProgress
 		}
 	}
 	return false
@@ -223,11 +238,21 @@ func (a *App) finishSession(now time.Time) {
 	if a.config.Progress == nil {
 		return
 	}
+	mode := a.progressMode()
+	a.comparison = a.config.Progress.Summary(mode, 10)
+	allTime := a.config.Progress.Summary(mode, 0)
+	a.newBestWPM = allTime.Sessions == 0 || wpm > allTime.BestWPM
 	practicedAt := a.session.FinishedAt
 	if practicedAt.IsZero() {
 		practicedAt = now
 	}
 	update := progress.SessionUpdate{
+		Mode:              mode,
+		WPM:               wpm,
+		Accuracy:          accuracy,
+		CorrectCharacters: a.session.CorrectCharacters(),
+		Attempts:          a.session.Attempts,
+		Elapsed:           a.session.Elapsed(now),
 		PracticedAt:       practicedAt,
 		CharacterMistakes: a.session.Mistakes,
 		WordMistakes:      a.session.WordMistakes,
@@ -236,8 +261,6 @@ func (a *App) finishSession(now time.Time) {
 	if a.kind == kindLesson {
 		lesson := a.config.Library.Lessons[a.lessonIndex]
 		update.LessonID = progress.LessonID(lesson.Source, lesson.Text)
-		update.WPM = wpm
-		update.Accuracy = accuracy
 		update.CompletedLesson = a.lessonMastered
 	}
 	if err := a.config.Progress.RecordSession(update); err != nil {
@@ -335,6 +358,23 @@ func (a *App) startNext() {
 func (a *App) resetResultState() {
 	a.lessonMastered = false
 	a.progressError = ""
+	a.comparison = progress.Summary{}
+	a.newBestWPM = false
+}
+
+func (a *App) progressMode() string {
+	switch a.kind {
+	case kindQuick:
+		return progress.ModeQuick
+	case kindLesson:
+		return progress.ModeLesson
+	case kindDictionary:
+		return progress.ModeDictionary
+	case kindAdaptive:
+		return progress.ModeAdaptive
+	default:
+		return ""
+	}
 }
 
 func (a *App) lessonIDs() []string {
@@ -373,6 +413,8 @@ func (a *App) render() {
 		a.renderHome()
 	case screenLessons:
 		a.renderLessons()
+	case screenProgress:
+		a.renderProgress()
 	case screenTyping:
 		a.renderTyping()
 	case screenResults:
@@ -401,21 +443,86 @@ func (a *App) renderHome() {
 	if a.homeNotice != "" {
 		notice = "\n[" + a.homeNotice + "](fg:coral)"
 	}
+	loaded := ""
+	if a.height >= 21 {
+		loaded = fmt.Sprintf(
+			"\n\nLoaded: [ %d paragraphs • %d lessons • %d dictionary words ](fg:lightgrey)",
+			len(a.config.Library.Paragraphs), len(a.config.Library.Lessons), len(a.config.Library.Words),
+		)
+	}
 	body.Text = fmt.Sprintf(
 		"[1 / Q](fg:hotpink,mod:bold)  Quick speed test     Random paragraphs for %s\n"+
 			"[2 / L](fg:orchid,mod:bold)   Lessons              %d ordered • %d mastered\n"+
 			"[3 / D](fg:turquoise,mod:bold)   Dictionary drill     %d randomized words\n"+
 			"[4 / C](fg:turquoise,mod:bold)   Continue course      %s\n"+
-			"[5 / A](fg:hotpink,mod:bold)   Adaptive practice    %s\n\n"+
-			"Loaded: [ %d paragraphs • %d lessons • %d dictionary words ](fg:lightgrey)%s",
+			"[5 / A](fg:hotpink,mod:bold)   Adaptive practice    %s\n"+
+			"[6 / S](fg:orchid,mod:bold)   Progress insights    Trends, bests, and trouble spots%s%s",
 		formatDuration(a.config.Duration), len(a.config.Library.Lessons), completed,
-		a.config.WordCount, continueText, adaptiveText,
-		len(a.config.Library.Paragraphs), len(a.config.Library.Lessons), len(a.config.Library.Words), notice,
+		a.config.WordCount, continueText, adaptiveText, loaded, notice,
 	)
 	body.TextAlignment = ui.AlignCenter
 	body.VerticalAlignment = ui.AlignMiddle
 	body.SetRect(2, 4, a.width-2, a.height-3)
-	footer := a.footer("1 quick • 2 lessons • 3 dictionary • 4 continue • 5 adaptive • Esc quit")
+	footer := a.footer("1 quick • 2 lessons • 3 dictionary • 4 continue • 5 adaptive • 6 progress • Esc quit")
+	ui.Render(backdrop, header, body, footer)
+}
+
+func (a *App) renderProgress() {
+	backdrop := a.backdrop()
+	header := a.header("PROGRESS INSIGHTS", "Practice history • personal bests • adaptive focus")
+	body := a.paragraph("Your progress")
+	if a.config.Progress == nil {
+		body.Text = "Progress storage is unavailable for this session."
+	} else {
+		allTime := a.config.Progress.Summary("", 0)
+		recent := a.config.Progress.Summary("", 10)
+		records := a.config.Progress.Recent("", 24)
+		trendWidth := a.width - 28
+		if trendWidth < 8 {
+			trendWidth = 8
+		}
+		if trendWidth > 36 {
+			trendWidth = 36
+		}
+
+		var lines []string
+		if allTime.Sessions == 0 {
+			lines = []string{
+				"[No completed sessions yet.](fg:hotpink,mod:bold)",
+				"Complete an exercise to begin building your history.",
+			}
+		} else {
+			lines = []string{
+				fmt.Sprintf("All time      [%d sessions](fg:hotpink,mod:bold) • %.0f WPM avg • %.1f%% • best %.0f", allTime.Sessions, allTime.AverageWPM, allTime.AverageAccuracy, allTime.BestWPM),
+				fmt.Sprintf("Recent 10    %.0f WPM avg • %.1f%% accuracy", recent.AverageWPM, recent.AverageAccuracy),
+				"WPM trend    [" + sessionSparkline(records, trendWidth, func(record progress.SessionRecord) float64 { return record.WPM }) + "](fg:hotpink)",
+				"Accuracy     [" + sessionSparkline(records, trendWidth, func(record progress.SessionRecord) float64 { return record.Accuracy }) + "](fg:turquoise)",
+			}
+			if a.height >= 23 {
+				lines = append(lines, "")
+				for _, mode := range []struct {
+					name string
+					id   string
+				}{
+					{name: "Quick", id: progress.ModeQuick},
+					{name: "Lessons", id: progress.ModeLesson},
+					{name: "Dictionary", id: progress.ModeDictionary},
+					{name: "Adaptive", id: progress.ModeAdaptive},
+				} {
+					summary := a.config.Progress.Summary(mode.id, 0)
+					lines = append(lines, fmt.Sprintf("%-12s %3d× • %3.0f WPM • %5.1f%%", mode.name, summary.Sessions, summary.AverageWPM, summary.AverageAccuracy))
+				}
+			}
+		}
+		lines = append(lines,
+			"",
+			"Trouble keys  "+formatTrouble(a.config.Progress.TopCharacters(5)),
+			"Trouble words "+formatTrouble(a.config.Progress.TopWords(4)),
+		)
+		body.Text = strings.Join(lines, "\n")
+	}
+	body.SetRect(2, 4, a.width-2, a.height-3)
+	footer := a.footer("A/Enter adaptive practice  •  M/Esc menu  •  Ctrl+C quit")
 	ui.Render(backdrop, header, body, footer)
 }
 
@@ -520,21 +627,36 @@ func (a *App) renderResults() {
 	if a.progressError != "" && a.kind != kindLesson {
 		mastery += "\nProgress      [not saved: " + a.progressError + "](fg:coral)"
 	}
+	comparison := ""
+	if a.height >= 20 {
+		if a.comparison.Sessions > 0 {
+			comparison = fmt.Sprintf(
+				"\nRecent avg    %.0f WPM • %.1f%%\nChange        [%+.0f WPM • %+.1f points](fg:orchid)",
+				a.comparison.AverageWPM,
+				a.comparison.AverageAccuracy,
+				a.session.WPM(now)-a.comparison.AverageWPM,
+				a.session.Accuracy()-a.comparison.AverageAccuracy,
+			)
+		}
+		if a.newBestWPM {
+			comparison += "\nSpeed         [new personal best ✓](fg:hotpink,mod:bold)"
+		}
+	}
 	body.Text = fmt.Sprintf(
 		"[%.0f WPM](fg:hotpink,mod:bold)\n\n"+
 			"Accuracy     [%.1f%%](fg:turquoise)\n"+
 			"Correct      %d characters\n"+
 			"Attempts     %d\n"+
 			"Elapsed      %s\n"+
-			"Finished by  %s%s\n\n"+
-			"[R](fg:orchid,mod:bold) repeat   [N / Enter](fg:hotpink,mod:bold) %s   [M](fg:turquoise,mod:bold) menu",
+			"Finished by  %s%s%s\n\n"+
+			"[R](fg:orchid,mod:bold) repeat   [N / Enter](fg:hotpink,mod:bold) %s   [S](fg:orchid,mod:bold) progress   [M](fg:turquoise,mod:bold) menu",
 		a.session.WPM(now), a.session.Accuracy(), a.session.CorrectCharacters(),
-		a.session.Attempts, formatDuration(a.session.Elapsed(now)), a.session.Reason, mastery, next,
+		a.session.Attempts, formatDuration(a.session.Elapsed(now)), a.session.Reason, mastery, comparison, next,
 	)
 	body.TextAlignment = ui.AlignCenter
 	body.VerticalAlignment = ui.AlignMiddle
 	body.SetRect(2, 4, a.width-2, a.height-3)
-	footer := a.footer("R repeat  •  N/Enter continue  •  M/Esc menu  •  Ctrl+C quit")
+	footer := a.footer("R repeat  •  N/Enter continue  •  S progress  •  M/Esc menu  •  Ctrl+C quit")
 	ui.Render(backdrop, header, body, footer)
 }
 
@@ -615,4 +737,48 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%ds", seconds)
 	}
 	return fmt.Sprintf("%d:%02d", seconds/60, seconds%60)
+}
+
+func sessionSparkline(records []progress.SessionRecord, width int, value func(progress.SessionRecord) float64) string {
+	if len(records) == 0 || width <= 0 {
+		return "—"
+	}
+	if len(records) > width {
+		records = records[len(records)-width:]
+	}
+	minimum := value(records[0])
+	maximum := minimum
+	for _, record := range records[1:] {
+		current := value(record)
+		if current < minimum {
+			minimum = current
+		}
+		if current > maximum {
+			maximum = current
+		}
+	}
+	levels := []rune("▁▂▃▄▅▆▇█")
+	var result strings.Builder
+	for _, record := range records {
+		index := len(levels) / 2
+		if maximum > minimum {
+			ratio := (value(record) - minimum) / (maximum - minimum)
+			index = int(ratio * float64(len(levels)-1))
+		}
+		result.WriteRune(levels[index])
+	}
+	return result.String()
+}
+
+func formatTrouble(items []progress.TroubleItem) string {
+	if len(items) == 0 {
+		return "none recorded"
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		text := strings.Join(strings.Fields(item.Text), " ")
+		text = strings.NewReplacer("[", "(", "]", ")").Replace(text)
+		parts = append(parts, fmt.Sprintf("%s×%d", text, item.Weight))
+	}
+	return strings.Join(parts, " • ")
 }

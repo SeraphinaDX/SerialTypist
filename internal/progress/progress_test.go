@@ -94,6 +94,99 @@ func TestOpenMigratesVersionOneProgress(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesVersionTwoProgress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	contents := "version = 2\n\n[character_mistakes]\np = 3\n\n[word_mistakes]\npeach = 2\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.data.Version != 3 || len(store.History()) != 0 {
+		t.Fatalf("migrated version = %d, history = %#v", store.data.Version, store.History())
+	}
+	characters, words := store.Mistakes()
+	if characters["p"] != 3 || words["peach"] != 2 {
+		t.Fatalf("migration lost adaptive data: %#v %#v", characters, words)
+	}
+}
+
+func TestSessionHistorySummariesAndPersistence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	updates := []SessionUpdate{
+		{Mode: ModeQuick, WPM: 20, Accuracy: 90, Elapsed: time.Minute, PracticedAt: base},
+		{Mode: ModeDictionary, WPM: 40, Accuracy: 100, Elapsed: 2 * time.Minute, PracticedAt: base.Add(time.Hour)},
+		{Mode: ModeQuick, WPM: 60, Accuracy: 100, Elapsed: time.Minute, PracticedAt: base.Add(2 * time.Hour)},
+	}
+	for _, update := range updates {
+		if err := store.RecordSession(update); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	quick := store.Summary(ModeQuick, 0)
+	if quick.Sessions != 2 || quick.AverageWPM != 40 || quick.AverageAccuracy != 95 || quick.BestWPM != 60 {
+		t.Fatalf("quick summary = %+v", quick)
+	}
+	recent := store.Summary("", 2)
+	if recent.Sessions != 2 || recent.AverageWPM != 50 || recent.TotalDuration != 3*time.Minute {
+		t.Fatalf("recent summary = %+v", recent)
+	}
+
+	reloaded, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history := reloaded.History(); len(history) != 3 || history[2].Mode != ModeQuick || history[2].WPM != 60 {
+		t.Fatalf("reloaded history = %#v", history)
+	}
+}
+
+func TestSessionHistoryIsBounded(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxHistory; index++ {
+		store.data.History = append(store.data.History, SessionRecord{Mode: ModeQuick, WPM: float64(index)})
+	}
+	if err := store.RecordSession(SessionUpdate{Mode: ModeAdaptive, WPM: 999, Accuracy: 100}); err != nil {
+		t.Fatal(err)
+	}
+	history := store.History()
+	if len(history) != maxHistory || history[0].WPM != 1 || history[len(history)-1].WPM != 999 {
+		t.Fatalf("bounded history has %d records, first %.0f, last %.0f", len(history), history[0].WPM, history[len(history)-1].WPM)
+	}
+}
+
+func TestTopTroubleSortsByWeightThenText(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSession(SessionUpdate{
+		CharacterMistakes: map[rune]int{'z': 2, 'a': 2, 'q': 5},
+		WordMistakes:      map[string]int{"zebra": 1, "quiet": 4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	characters := store.TopCharacters(2)
+	if len(characters) != 2 || characters[0].Text != "q" || characters[1].Text != "a" {
+		t.Fatalf("top characters = %#v", characters)
+	}
+	words := store.TopWords(1)
+	if len(words) != 1 || words[0].Text != "quiet" {
+		t.Fatalf("top words = %#v", words)
+	}
+}
+
 func TestRecordLessonPersistsBestResults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	store, err := Open(path)
