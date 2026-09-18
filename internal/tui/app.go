@@ -18,12 +18,14 @@ import (
 )
 
 type Config struct {
-	Duration        time.Duration
-	WordCount       int
-	MinimumAccuracy float64
-	MinimumWPM      float64
-	Library         content.Library
-	Progress        *progress.Store
+	Duration             time.Duration
+	WordCount            int
+	CorrectionMode       typingengine.CorrectionMode
+	LessonCorrectionMode typingengine.CorrectionMode
+	MinimumAccuracy      float64
+	MinimumWPM           float64
+	Library              content.Library
+	Progress             *progress.Store
 }
 
 type screen int
@@ -70,6 +72,12 @@ func New(config Config) *App {
 	}
 	if config.WordCount <= 0 {
 		config.WordCount = 60
+	}
+	if config.CorrectionMode == "" {
+		config.CorrectionMode = typingengine.CorrectionFree
+	}
+	if config.LessonCorrectionMode == "" {
+		config.LessonCorrectionMode = typingengine.CorrectionStrict
 	}
 	app := &App{
 		config: config,
@@ -166,6 +174,8 @@ func (a *App) handle(event ui.Event) bool {
 			}
 		case "<Enter>":
 			a.startLesson(a.lessonSelection)
+		case "a", "A":
+			a.startAccuracyLesson(a.lessonSelection)
 		case "<Escape>":
 			a.screen = screenHome
 		}
@@ -209,6 +219,8 @@ func (a *App) handle(event ui.Event) bool {
 			a.screen = screenHome
 		case "s", "S":
 			a.screen = screenProgress
+		case "x", "X":
+			a.restartStrict()
 		}
 	}
 	return false
@@ -275,7 +287,7 @@ func (a *App) startQuick() {
 	a.homeNotice = ""
 	a.kind = kindQuick
 	a.sessionTitle = fmt.Sprintf("Quick Speed Test — %s", formatDuration(a.config.Duration))
-	a.session = typingengine.New(target, a.config.Duration)
+	a.session = typingengine.NewWithMode(target, a.config.Duration, a.config.CorrectionMode)
 	a.screen = screenTyping
 }
 
@@ -285,7 +297,7 @@ func (a *App) startDictionary() {
 	a.homeNotice = ""
 	a.kind = kindDictionary
 	a.sessionTitle = fmt.Sprintf("Dictionary Drill — %d words", a.config.WordCount)
-	a.session = typingengine.New(target, 0)
+	a.session = typingengine.NewWithMode(target, 0, a.config.CorrectionMode)
 	a.screen = screenTyping
 }
 
@@ -308,11 +320,22 @@ func (a *App) startAdaptive() {
 	a.homeNotice = ""
 	a.kind = kindAdaptive
 	a.sessionTitle = fmt.Sprintf("Adaptive Practice — %d focused words", a.config.WordCount)
-	a.session = typingengine.New(target, 0)
+	a.session = typingengine.NewWithMode(target, 0, a.config.CorrectionMode)
 	a.screen = screenTyping
 }
 
 func (a *App) startLesson(index int) {
+	a.startLessonWithMode(index, a.config.LessonCorrectionMode)
+}
+
+func (a *App) startAccuracyLesson(index int) {
+	a.startLessonWithMode(index, typingengine.CorrectionStrict)
+	if a.session != nil {
+		a.sessionTitle = "Accuracy " + a.sessionTitle
+	}
+}
+
+func (a *App) startLessonWithMode(index int, correction typingengine.CorrectionMode) {
 	if index < 0 || index >= len(a.config.Library.Lessons) {
 		return
 	}
@@ -322,7 +345,7 @@ func (a *App) startLesson(index int) {
 	a.lessonIndex = index
 	lesson := a.config.Library.Lessons[index]
 	a.sessionTitle = fmt.Sprintf("Lesson %d/%d — %s", index+1, len(a.config.Library.Lessons), lesson.Name)
-	a.session = typingengine.New(lesson.Text, 0)
+	a.session = typingengine.NewWithMode(lesson.Text, 0, correction)
 	a.screen = screenTyping
 }
 
@@ -331,7 +354,19 @@ func (a *App) restartSame() {
 		return
 	}
 	a.resetResultState()
-	a.session = typingengine.New(string(a.session.Target), a.session.Limit)
+	a.session = typingengine.NewWithMode(string(a.session.Target), a.session.Limit, a.session.Correction)
+	a.screen = screenTyping
+}
+
+func (a *App) restartStrict() {
+	if a.session == nil {
+		return
+	}
+	a.resetResultState()
+	if !strings.HasPrefix(a.sessionTitle, "Accuracy Retry — ") {
+		a.sessionTitle = "Accuracy Retry — " + a.sessionTitle
+	}
+	a.session = typingengine.NewWithMode(string(a.session.Target), 0, typingengine.CorrectionStrict)
 	a.screen = screenTyping
 }
 
@@ -570,14 +605,20 @@ func (a *App) renderLessons() {
 	body.Text = strings.Join(lines, "\n")
 	body.TitleRight = fmt.Sprintf(" %d of %d • %d mastered ", a.lessonSelection+1, len(a.config.Library.Lessons), a.completedLessonCount())
 	body.SetRect(2, 4, a.width-2, a.height-3)
-	footer := a.footer("↑/↓ or j/k select  •  Enter start  •  Esc menu  •  Ctrl+C quit")
+	footer := a.footer("↑/↓ or j/k select  •  Enter start  •  A strict accuracy lesson  •  Esc menu")
 	ui.Render(backdrop, header, body, footer)
 }
 
 func (a *App) renderTyping() {
 	now := time.Now()
 	backdrop := a.backdrop()
-	header := a.header(a.sessionTitle, "Type the highlighted text • timer starts with your first key")
+	subtitle := "Free typing • correct errors with Backspace • timer starts with your first key"
+	footerText := "Backspace corrects  •  Esc abandons session  •  Ctrl+C quits"
+	if a.session.Correction == typingengine.CorrectionStrict {
+		subtitle = "Strict correction • wrong keys do not advance • timer starts with your first key"
+		footerText = "Type the highlighted key to continue  •  Esc abandons  •  Ctrl+C quits"
+	}
+	header := a.header(a.sessionTitle, subtitle)
 	stats := widgets.NewParagraph()
 	stats.Border = false
 	stats.BackgroundColor = ui.NewRGBColor(16, 9, 18)
@@ -591,8 +632,9 @@ func (a *App) renderTyping() {
 	pane.TitleRight = fmt.Sprintf(" %d / %d ", a.session.Position(), len(a.session.Target))
 	pane.Target = a.session.Target
 	pane.Typed = a.session.Typed
+	pane.CorrectionRequired = a.session.NeedsCorrection()
 	pane.SetRect(1, 7, a.width-1, a.height-3)
-	footer := a.footer("Backspace corrects  •  Esc abandons session  •  Ctrl+C quits")
+	footer := a.footer(footerText)
 	ui.Render(backdrop, header, stats, pane, footer)
 }
 
@@ -647,16 +689,18 @@ func (a *App) renderResults() {
 			"Accuracy     [%.1f%%](fg:turquoise)\n"+
 			"Correct      %d characters\n"+
 			"Attempts     %d\n"+
+			"Errors       %d corrected • %d unresolved\n"+
 			"Elapsed      %s\n"+
 			"Finished by  %s%s%s\n\n"+
-			"[R](fg:orchid,mod:bold) repeat   [N / Enter](fg:hotpink,mod:bold) %s   [S](fg:orchid,mod:bold) progress   [M](fg:turquoise,mod:bold) menu",
+			"[R](fg:orchid,mod:bold) repeat   [X](fg:coral,mod:bold) strict retry   [N / Enter](fg:hotpink,mod:bold) %s   [S](fg:orchid,mod:bold) progress   [M](fg:turquoise,mod:bold) menu",
 		a.session.WPM(now), a.session.Accuracy(), a.session.CorrectCharacters(),
-		a.session.Attempts, formatDuration(a.session.Elapsed(now)), a.session.Reason, mastery, comparison, next,
+		a.session.Attempts, a.session.CorrectedErrors, a.session.UnresolvedErrors(),
+		formatDuration(a.session.Elapsed(now)), a.session.Reason, mastery, comparison, next,
 	)
 	body.TextAlignment = ui.AlignCenter
 	body.VerticalAlignment = ui.AlignMiddle
 	body.SetRect(2, 4, a.width-2, a.height-3)
-	footer := a.footer("R repeat  •  N/Enter continue  •  S progress  •  M/Esc menu  •  Ctrl+C quit")
+	footer := a.footer("R repeat  •  X strict retry  •  N/Enter continue  •  S progress  •  M/Esc menu")
 	ui.Render(backdrop, header, body, footer)
 }
 
@@ -677,8 +721,8 @@ func (a *App) statsLine(now time.Time) string {
 		timing = fmt.Sprintf("Time  %s", formatDuration(a.session.Elapsed(now)))
 	}
 	return fmt.Sprintf(
-		"[WPM %.0f](fg:hotpink,mod:bold)    [Accuracy %.1f%%](fg:turquoise)    [Errors %d](fg:coral)    %s",
-		a.session.WPM(now), a.session.Accuracy(), a.session.CurrentErrors(), timing,
+		"[WPM %.0f](fg:hotpink,mod:bold)    [Accuracy %.1f%%](fg:turquoise)    [Errors %d • fixed %d](fg:coral)    %s",
+		a.session.WPM(now), a.session.Accuracy(), a.session.UnresolvedErrors(), a.session.CorrectedErrors, timing,
 	)
 }
 

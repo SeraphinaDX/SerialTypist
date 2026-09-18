@@ -74,6 +74,8 @@ dictionary = "words.txt"
 [practice]
 duration = "60s"
 dictionary_words = 60
+correction_mode = "free"
+lesson_correction_mode = "strict"
 
 [mastery]
 minimum_accuracy = 95.0
@@ -115,6 +117,8 @@ Prompt.
 | `-progress=FILE` | per-user state directory | Progress and session-history file |
 | `-duration=TIME` | configured or `60s` | Quick-test length (`30s`, `2m`, etc.) |
 | `-words=N` | configured or `60` | Words in each dictionary drill |
+| `-correction=MODE` | configured or `free` | Correction mode for quick, dictionary, and adaptive practice |
+| `-lesson-correction=MODE` | configured or `strict` | Correction mode for lessons |
 | `-version` | off | Print the program version |
 
 Supplying a content path replaces the corresponding bundled content. This makes
@@ -160,6 +164,28 @@ useful drill even when no dictionary word contains them.
 After each adaptive drill, earlier mistake weights are reduced before any new
 mistakes are added. This lets the focus move on as accuracy improves instead of
 repeating old trouble spots forever.
+
+## Accuracy training and correction modes
+
+SerialTypist supports two correction behaviors:
+
+- `free` advances after every key, preserving the natural flow of a speed test.
+  Incorrect characters remain highlighted and can be removed with Backspace.
+- `strict` counts an incorrect key but keeps the cursor on the expected
+  character. The target flashes in the error color and typing the correct key
+  continues the exercise; Backspace is not required.
+
+Quick tests, dictionary drills, and adaptive practice use `free` by default.
+Lessons use `strict` by default so accuracy is established before speed. Change
+either behavior in `[practice]` or with `-correction=MODE` and
+`-lesson-correction=MODE`. Both modes count every incorrect attempt for accuracy
+and adaptive practice.
+
+Free mode does not end while an incorrect character remains in the completed
+line, including an incorrect final character. This gives the learner a chance
+to Backspace and correct it. From any results screen, press `X` for an untimed
+strict retry of the same text. In the lesson browser, press `A` to start the
+selected lesson in strict accuracy mode regardless of configuration.
 
 ## Progress insights
 
@@ -242,18 +268,22 @@ removed while loading.
 
 - `Up`/`Down` or `k`/`j`: select a lesson
 - `Enter`: begin
+- `A`: begin the selected lesson in strict accuracy mode
 - `Esc`: return to the home screen
 
 ### While typing
 
 - Type normally; the timer begins with the first printable character.
-- `Backspace`: correct the previous character.
+- `Backspace`: correct the previous character in free mode.
+- In strict mode, an incorrect key does not advance; type the highlighted key
+  to continue.
 - `Esc`: abandon the exercise and return home.
 - `Ctrl+C`: quit safely.
 
 ### Results
 
 - `R`: repeat the same text
+- `X`: retry the same text as an untimed strict accuracy drill
 - `N` or `Enter`: get a new test/drill or continue to the next lesson
 - `S`: open progress insights
 - `M` or `Esc`: return home
@@ -262,8 +292,9 @@ removed while loading.
 
 WPM uses the conventional five-correct-characters-per-word formula. Accuracy
 counts every printable key attempt, so a corrected mistake still affects the
-accuracy result. The live error count shows only mistakes still present in the
-typed text. Lesson mastery defaults to at least 95% accuracy and 20 WPM.
+accuracy result. Live and final statistics report corrected errors separately
+from unresolved errors. Lesson mastery defaults to at least 95% accuracy and
+20 WPM.
 
 ## Development
 
@@ -274,8 +305,8 @@ go build ./cmd/serialtypist
 ```
 
 The content loader, configuration loader, progress history and migration,
-adaptive drill generator, session/scoring engine, Unicode behavior, trend
-rendering, and text layout have unit tests. GitHub Actions runs the complete
-test, vet, and build suite on Linux, Windows, and macOS. The TUI itself can be
-smoke-tested in any 56×18 or larger terminal; an 80×24 TrueColor terminal is
-recommended.
+adaptive drill generator, free and strict correction engines, session scoring,
+Unicode behavior, trend rendering, and text layout have unit tests. GitHub
+Actions runs the complete test, vet, and build suite on Linux, Windows, and
+macOS. The TUI itself can be smoke-tested in any 56×18 or larger terminal; an
+80×24 TrueColor terminal is recommended.

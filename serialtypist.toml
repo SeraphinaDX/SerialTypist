@@ -8,6 +8,10 @@ dictionary = ""
 [practice]
 duration = "60s"
 dictionary_words = 60
+# Free mode allows normal speed-test flow. Strict mode holds the cursor on an
+# incorrect key until the expected key is typed.
+correction_mode = "free"
+lesson_correction_mode = "strict"
 
 # A lesson receives a checkmark after one attempt meets both requirements.
 # Set either value to 0 to disable that requirement.

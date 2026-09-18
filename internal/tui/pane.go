@@ -12,8 +12,9 @@ import (
 // gives the tutor precise per-character colors and an exact visual cursor.
 type TypingPane struct {
 	*ui.Block
-	Target []rune
-	Typed  []rune
+	Target             []rune
+	Typed              []rune
+	CorrectionRequired bool
 
 	PendingStyle     ui.Style
 	CurrentWordStyle ui.Style
@@ -82,6 +83,9 @@ func (p *TypingPane) Draw(buf *ui.Buffer) {
 		}
 		if i == position {
 			style = p.CursorStyle
+			if p.CorrectionRequired {
+				style = p.IncorrectStyle
+			}
 		}
 
 		point := image.Pt(p.Inner.Min.X+cell.X, p.Inner.Min.Y+y)

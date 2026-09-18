@@ -9,9 +9,15 @@ import (
 // FinishReason identifies why a typing session stopped.
 type FinishReason string
 
+// CorrectionMode controls whether an incorrect key advances the cursor.
+type CorrectionMode string
+
 const (
 	FinishedTarget FinishReason = "target completed"
 	FinishedTime   FinishReason = "time expired"
+
+	CorrectionFree   CorrectionMode = "free"
+	CorrectionStrict CorrectionMode = "strict"
 )
 
 // Session holds the state and statistics for one typing exercise.
@@ -19,19 +25,31 @@ type Session struct {
 	Target          []rune
 	Typed           []rune
 	Limit           time.Duration
+	Correction      CorrectionMode
 	StartedAt       time.Time
 	FinishedAt      time.Time
 	Attempts        int
 	CorrectAttempts int
+	CorrectedErrors int
 	Mistakes        map[rune]int
 	WordMistakes    map[string]int
 	Reason          FinishReason
+	pendingErrors   int
 }
 
 func New(target string, limit time.Duration) *Session {
+	return NewWithMode(target, limit, CorrectionFree)
+}
+
+// NewWithMode creates a session using the requested correction behavior.
+func NewWithMode(target string, limit time.Duration, mode CorrectionMode) *Session {
+	if mode != CorrectionStrict {
+		mode = CorrectionFree
+	}
 	return &Session{
 		Target:       []rune(target),
 		Limit:        limit,
+		Correction:   mode,
 		Mistakes:     make(map[rune]int),
 		WordMistakes: make(map[string]int),
 	}
@@ -58,14 +76,20 @@ func (s *Session) Add(r rune, now time.Time) {
 	s.Attempts++
 	if r == expected {
 		s.CorrectAttempts++
-	} else if !unicode.IsSpace(expected) {
-		s.Mistakes[expected]++
-		if word := targetWordAt(s.Target, position); word != "" {
-			s.WordMistakes[word]++
+		if s.Correction == CorrectionStrict && s.pendingErrors > 0 {
+			s.CorrectedErrors += s.pendingErrors
+			s.pendingErrors = 0
 		}
+		s.Typed = append(s.Typed, r)
+	} else {
+		s.recordMistake(expected, position)
+		if s.Correction == CorrectionStrict {
+			s.pendingErrors++
+			return
+		}
+		s.Typed = append(s.Typed, r)
 	}
-	s.Typed = append(s.Typed, r)
-	if len(s.Typed) == len(s.Target) {
+	if len(s.Typed) == len(s.Target) && s.UnresolvedErrors() == 0 {
 		s.finish(now, FinishedTarget)
 	}
 }
@@ -75,6 +99,13 @@ func (s *Session) Add(r rune, now time.Time) {
 func (s *Session) Backspace() {
 	if s.Done() || len(s.Typed) == 0 {
 		return
+	}
+	if s.Correction == CorrectionStrict && s.pendingErrors > 0 {
+		return
+	}
+	position := len(s.Typed) - 1
+	if s.Typed[position] != s.Target[position] {
+		s.CorrectedErrors++
 	}
 	s.Typed = s.Typed[:len(s.Typed)-1]
 }
@@ -137,7 +168,18 @@ func (s *Session) CorrectCharacters() int {
 	return correct
 }
 
-func (s *Session) CurrentErrors() int { return len(s.Typed) - s.CorrectCharacters() }
+// UnresolvedErrors returns errors still present in free mode, or rejected
+// strict-mode attempts that have not yet been followed by the expected key.
+func (s *Session) UnresolvedErrors() int {
+	return len(s.Typed) - s.CorrectCharacters() + s.pendingErrors
+}
+
+func (s *Session) CurrentErrors() int { return s.UnresolvedErrors() }
+
+// NeedsCorrection reports whether strict mode is waiting on the expected key.
+func (s *Session) NeedsCorrection() bool {
+	return s.Correction == CorrectionStrict && s.pendingErrors > 0
+}
 
 func (s *Session) Accuracy() float64 {
 	if s.Attempts == 0 {
@@ -164,6 +206,16 @@ func (s *Session) Progress() float64 {
 		return 1
 	}
 	return float64(len(s.Typed)) / float64(len(s.Target))
+}
+
+func (s *Session) recordMistake(expected rune, position int) {
+	if unicode.IsSpace(expected) {
+		return
+	}
+	s.Mistakes[expected]++
+	if word := targetWordAt(s.Target, position); word != "" {
+		s.WordMistakes[word]++
+	}
 }
 
 func targetWordAt(target []rune, position int) string {
