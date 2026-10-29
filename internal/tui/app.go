@@ -13,6 +13,7 @@ import (
 
 	"serialtypist/internal/adaptive"
 	"serialtypist/internal/content"
+	"serialtypist/internal/keyboard"
 	"serialtypist/internal/progress"
 	typingengine "serialtypist/internal/typing"
 )
@@ -24,6 +25,7 @@ type Config struct {
 	LessonCorrectionMode typingengine.CorrectionMode
 	MinimumAccuracy      float64
 	MinimumWPM           float64
+	KeyboardGuide        bool
 	Library              content.Library
 	Progress             *progress.Store
 }
@@ -62,6 +64,7 @@ type App struct {
 	homeNotice      string
 	comparison      progress.Summary
 	newBestWPM      bool
+	keyboardGuide   bool
 	width           int
 	height          int
 }
@@ -80,9 +83,10 @@ func New(config Config) *App {
 		config.LessonCorrectionMode = typingengine.CorrectionStrict
 	}
 	app := &App{
-		config: config,
-		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
-		screen: screenHome,
+		config:        config,
+		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		screen:        screenHome,
+		keyboardGuide: config.KeyboardGuide,
 	}
 	if next := app.nextIncompleteLesson(); next >= 0 {
 		app.lessonSelection = next
@@ -190,6 +194,9 @@ func (a *App) handle(event ui.Event) bool {
 
 	case screenTyping:
 		switch event.ID {
+		case "<C-k>", "<F2>":
+			a.keyboardGuide = !a.keyboardGuide
+			return false
 		case "<Escape>":
 			a.session = nil
 			a.screen = screenHome
@@ -551,6 +558,12 @@ func (a *App) renderProgress() {
 		}
 		lines = append(lines,
 			"",
+		)
+		if a.height >= 24 {
+			characters, _ := a.config.Progress.Mistakes()
+			lines = append(lines, "Trouble fingers  "+formatFingerTrouble(keyboard.TroubleByFinger(characters), 3))
+		}
+		lines = append(lines,
 			"Trouble keys  "+formatTrouble(a.config.Progress.TopCharacters(5)),
 			"Trouble words "+formatTrouble(a.config.Progress.TopWords(4)),
 		)
@@ -613,10 +626,10 @@ func (a *App) renderTyping() {
 	now := time.Now()
 	backdrop := a.backdrop()
 	subtitle := "Free typing • correct errors with Backspace • timer starts with your first key"
-	footerText := "Backspace corrects  •  Esc abandons session  •  Ctrl+C quits"
+	footerText := "Backspace corrects  •  Ctrl+K/F2 guide  •  Esc abandons  •  Ctrl+C quits"
 	if a.session.Correction == typingengine.CorrectionStrict {
 		subtitle = "Strict correction • wrong keys do not advance • timer starts with your first key"
-		footerText = "Type the highlighted key to continue  •  Esc abandons  •  Ctrl+C quits"
+		footerText = "Type highlighted key  •  Ctrl+K/F2 guide  •  Esc abandons  •  Ctrl+C quits"
 	}
 	header := a.header(a.sessionTitle, subtitle)
 	stats := widgets.NewParagraph()
@@ -625,7 +638,16 @@ func (a *App) renderTyping() {
 	stats.TextStyle = ui.NewStyle(ui.NewRGBColor(255, 238, 248), ui.NewRGBColor(16, 9, 18))
 	stats.TextAlignment = ui.AlignCenter
 	stats.Text = a.statsLine(now)
-	stats.SetRect(0, 4, a.width, 7)
+	statsBottom := 7
+	paneTop := 7
+	expected, hasExpected := nextExpected(a.session.Target, a.session.Position())
+	fullGuide := a.keyboardGuide && hasExpected && a.width >= fullGuideMinimumWidth && a.height >= fullGuideMinimumHeight
+	if a.keyboardGuide && hasExpected && !fullGuide {
+		stats.Text += "\n" + keyboardHint(expected)
+		statsBottom = 8
+		paneTop = 8
+	}
+	stats.SetRect(0, 4, a.width, statsBottom)
 
 	pane := NewTypingPane()
 	pane.Title = " Copy this text "
@@ -633,8 +655,20 @@ func (a *App) renderTyping() {
 	pane.Target = a.session.Target
 	pane.Typed = a.session.Typed
 	pane.CorrectionRequired = a.session.NeedsCorrection()
-	pane.SetRect(1, 7, a.width-1, a.height-3)
+	pane.SetRect(1, paneTop, a.width-1, a.height-3)
 	footer := a.footer(footerText)
+	if fullGuide {
+		guide := widgets.NewParagraph()
+		guide.Border = false
+		guide.BackgroundColor = ui.NewRGBColor(16, 9, 18)
+		guide.TextStyle = ui.NewStyle(ui.NewRGBColor(255, 238, 248), ui.NewRGBColor(16, 9, 18))
+		guide.TextAlignment = ui.AlignCenter
+		guide.Text = renderKeyboardGuide(expected, a.session.NeedsCorrection())
+		guide.SetRect(0, 7, a.width, 13)
+		pane.SetRect(1, 13, a.width-1, a.height-3)
+		ui.Render(backdrop, header, stats, guide, pane, footer)
+		return
+	}
 	ui.Render(backdrop, header, stats, pane, footer)
 }
 
@@ -826,3 +860,4 @@ func formatTrouble(items []progress.TroubleItem) string {
 	}
 	return strings.Join(parts, " • ")
 }
+

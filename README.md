@@ -19,8 +19,12 @@ SerialTypist is a colorful terminal typing tutor written in Go with
 The typing surface draws directly into gotui's cell buffer. Correct characters,
 incorrect characters, the current word, and the exact next position are all
 visually distinct. Text entry and cursor positions are Unicode-aware.
+An optional QWERTY keyboard guide highlights the next physical key, Shift when
+needed, and the touch-typing finger to use. It automatically collapses to a
+one-line hint in smaller terminals.
 Completed exercises also feed a local progress dashboard with recent trends,
-personal bests, and the learner's current adaptive trouble spots.
+personal bests, and the learner's current adaptive trouble spots by key, word,
+and finger.
 
 ## Quick start
 
@@ -74,6 +78,7 @@ dictionary = "words.txt"
 [practice]
 duration = "60s"
 dictionary_words = 60
+keyboard_guide = true
 correction_mode = "free"
 lesson_correction_mode = "strict"
 
@@ -187,11 +192,26 @@ to Backspace and correct it. From any results screen, press `X` for an untimed
 strict retry of the same text. In the lesson browser, press `A` to start the
 selected lesson in strict accuracy mode regardless of configuration.
 
+## Keyboard and finger guidance
+
+Set `keyboard_guide = true` in `[practice]` to show QWERTY touch-typing
+guidance. On terminals at least 66 columns by 25 rows, SerialTypist draws the
+full keyboard and highlights the next physical key. Capitals and shifted
+symbols also highlight Shift, while a strict-correction error changes the next
+key to the error color. Smaller supported terminals show a compact hint such as
+`Next Shift + A — left pinky` so the typing text keeps enough room.
+
+The guide recognizes standard US QWERTY letters, digits, punctuation, and
+Space. Other Unicode characters remain fully typeable and receive a compact
+fallback hint rather than an incorrect finger assignment. Press `Ctrl+K` or
+`F2` during an exercise to hide or restore the guide for the current run.
+
 ## Progress insights
 
 Press `S` or `6` on the home screen to open the progress dashboard. It shows
 all-time and recent average WPM and accuracy, a compact trend graph, the results
-for each practice mode, and the highest-weight trouble characters and words.
+for each practice mode, and the highest-weight trouble fingers, characters, and
+words.
 `A` or `Enter` starts adaptive practice directly from the dashboard.
 
 The results screen compares a completed exercise with the previous ten sessions
@@ -277,6 +297,7 @@ removed while loading.
 - `Backspace`: correct the previous character in free mode.
 - In strict mode, an incorrect key does not advance; type the highlighted key
   to continue.
+- `Ctrl+K` or `F2`: toggle keyboard and finger guidance.
 - `Esc`: abandon the exercise and return home.
 - `Ctrl+C`: quit safely.
 
@@ -310,3 +331,4 @@ Unicode behavior, trend rendering, and text layout have unit tests. GitHub
 Actions runs the complete test, vet, and build suite on Linux, Windows, and
 macOS. The TUI itself can be smoke-tested in any 56×18 or larger terminal; an
 80×24 TrueColor terminal is recommended.
+

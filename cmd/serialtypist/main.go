@@ -12,7 +12,7 @@ import (
 	typingengine "serialtypist/internal/typing"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	defaults := config.Defaults()
@@ -110,6 +110,7 @@ func main() {
 		WordCount:            settings.DictionaryWords,
 		CorrectionMode:       typingengine.CorrectionMode(settings.CorrectionMode),
 		LessonCorrectionMode: typingengine.CorrectionMode(settings.LessonCorrectionMode),
+		KeyboardGuide:        settings.KeyboardGuide,
 		MinimumAccuracy:      settings.MinimumAccuracy,
 		MinimumWPM:           settings.MinimumWPM,
 		Library:              library,
@@ -124,3 +125,4 @@ func exitError(message string) {
 	fmt.Fprintf(os.Stderr, "serialtypist: %s\n", message)
 	os.Exit(1)
 }
+

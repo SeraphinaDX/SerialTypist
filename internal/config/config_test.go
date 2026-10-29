@@ -52,6 +52,7 @@ dictionary = "words.txt"
 [practice]
 duration = "45s"
 dictionary_words = 75
+keyboard_guide = false
 correction_mode = "strict"
 lesson_correction_mode = "free"
 
@@ -84,6 +85,9 @@ minimum_wpm = 25
 	}
 	if settings.DictionaryWords != 75 {
 		t.Fatalf("dictionary words = %d", settings.DictionaryWords)
+	}
+	if settings.KeyboardGuide {
+		t.Fatal("keyboard guide = true, want false")
 	}
 	if settings.CorrectionMode != CorrectionStrict || settings.LessonCorrectionMode != CorrectionFree {
 		t.Fatalf("correction modes = %q and %q", settings.CorrectionMode, settings.LessonCorrectionMode)
@@ -137,4 +141,8 @@ func TestDefaultsUseFreePracticeAndStrictLessons(t *testing.T) {
 	if settings.CorrectionMode != CorrectionFree || settings.LessonCorrectionMode != CorrectionStrict {
 		t.Fatalf("default correction modes = %q and %q", settings.CorrectionMode, settings.LessonCorrectionMode)
 	}
+	if !settings.KeyboardGuide {
+		t.Fatal("keyboard guide should be enabled by default")
+	}
 }
+
