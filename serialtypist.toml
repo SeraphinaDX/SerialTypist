@@ -8,6 +8,7 @@ dictionary = ""
 [practice]
 duration = "60s"
 dictionary_words = 60
+keyboard_guide = true
 # Free mode allows normal speed-test flow. Strict mode holds the cursor on an
 # incorrect key until the expected key is typed.
 correction_mode = "free"
@@ -18,3 +19,4 @@ lesson_correction_mode = "strict"
 [mastery]
 minimum_accuracy = 95.0
 minimum_wpm = 20.0
+
