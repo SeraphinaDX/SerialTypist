@@ -26,6 +26,7 @@ type Settings struct {
 	Dictionary           string
 	Duration             time.Duration
 	DictionaryWords      int
+	KeyboardGuide        bool
 	CorrectionMode       string
 	LessonCorrectionMode string
 	MinimumAccuracy      float64
@@ -41,6 +42,7 @@ type diskConfig struct {
 	Practice struct {
 		Duration             string `toml:"duration"`
 		DictionaryWords      int    `toml:"dictionary_words"`
+		KeyboardGuide        bool   `toml:"keyboard_guide"`
 		CorrectionMode       string `toml:"correction_mode"`
 		LessonCorrectionMode string `toml:"lesson_correction_mode"`
 	} `toml:"practice"`
@@ -55,6 +57,7 @@ func Defaults() Settings {
 	return Settings{
 		Duration:             60 * time.Second,
 		DictionaryWords:      60,
+		KeyboardGuide:        true,
 		CorrectionMode:       CorrectionFree,
 		LessonCorrectionMode: CorrectionStrict,
 		MinimumAccuracy:      95,
@@ -145,6 +148,9 @@ func loadFile(path string) (Settings, string, error) {
 		}
 		settings.DictionaryWords = stored.Practice.DictionaryWords
 	}
+	if metadata.IsDefined("practice", "keyboard_guide") {
+		settings.KeyboardGuide = stored.Practice.KeyboardGuide
+	}
 	if metadata.IsDefined("practice", "correction_mode") {
 		mode := strings.ToLower(strings.TrimSpace(stored.Practice.CorrectionMode))
 		if !ValidCorrectionMode(mode) {
@@ -205,3 +211,4 @@ func resolveContentPath(baseDir, configured string) string {
 	}
 	return filepath.Clean(filepath.Join(baseDir, configured))
 }
+
